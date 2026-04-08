@@ -57,6 +57,8 @@ class Listener:
         return audio.flatten()
 
     def _transcribe(self, audio: np.ndarray, model) -> str:
+        if audio is None or audio.size == 0:
+            return ""
         result = model.transcribe(audio, fp16=False, language="en")
         return result.get("text", "").strip().lower()
 
