@@ -35,9 +35,9 @@ def set_volume(level: int) -> str:
 def run_command(cmd: str) -> str:
     """
     Run a safe shell command and return its stdout (first 500 chars).
-    Blocks shell operators to prevent injection.
+    Blocks shell operators and dangerous constructs.
     """
-    blocked = [";", "&&", "||", "|", ">", "<", "`", "$"]
+    blocked = [";", "&&", "||", "|", ">", "<", "`", "$", "\n", "$(", "${"]
     for tok in blocked:
         if tok in cmd:
             return "I can't run that command — it looks unsafe."
@@ -47,6 +47,9 @@ def run_command(cmd: str) -> str:
     except ValueError:
         return "I couldn't parse that command."
 
+    if not args:
+        return "Empty command."
+
     result = subprocess.run(
         args,
         capture_output=True,
@@ -54,4 +57,6 @@ def run_command(cmd: str) -> str:
         timeout=15,
     )
     output = (result.stdout or result.stderr or "Done.").strip()
-    return output[:500]
+    if len(output) > 500:
+        return output[:500] + "… (truncated)"
+    return output or "Done."

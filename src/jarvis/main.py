@@ -10,12 +10,38 @@ import os
 import sys
 
 import yaml
+from rich.console import Console
+from rich.text import Text
+from rich.theme import Theme
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from jarvis.core.brain import Brain
 from jarvis.core.speaker import Speaker
 from jarvis.memory.conversation import ConversationMemory
+
+# ----- readline history (best-effort; not available everywhere) --------
+try:
+    import readline
+    _HISTORY_FILE = os.path.expanduser("~/.jarvis_history")
+    try:
+        readline.read_history_file(_HISTORY_FILE)
+    except FileNotFoundError:
+        pass
+    import atexit
+    atexit.register(readline.write_history_file, _HISTORY_FILE)
+except ImportError:
+    pass
+
+# ----- Rich console ----------------------------------------------------
+_THEME = Theme({
+    "jarvis": "bold cyan",
+    "you":    "bold green",
+    "info":   "dim white",
+    "error":  "bold red",
+    "prompt": "bold yellow",
+})
+console = Console(theme=_THEME)
 
 
 def load_config() -> dict:
@@ -35,71 +61,101 @@ def check_ollama(brain: Brain) -> bool:
         return False
 
 
-def run_turn(user_text: str, brain: Brain, speaker: Speaker, memory: ConversationMemory) -> None:
+def run_turn(
+    user_text: str,
+    brain: Brain,
+    speaker: Speaker,
+    memory: ConversationMemory,
+) -> None:
     if not user_text.strip():
         return
-    print(f"[You] {user_text}")
+
     memory.add_message("user", user_text)
-    response = brain.process(user_text)
-    print(f"[Jarvis] {response}")
+
+    # Stream the LLM response token by token
+    console.print("\n[jarvis]Jarvis:[/jarvis] ", end="")
+    tokens: list[str] = []
+
+    def _on_token(token: str) -> None:
+        tokens.append(token)
+        console.print(token, end="", markup=False, highlight=False)
+
+    response = brain.process(user_text, stream_callback=_on_token)
+
+    # If brain dispatched a tool, the tool result replaces the streamed text
+    streamed = "".join(tokens).strip()
+    if response != streamed:
+        # Tool was called — print the actual result (replace streamed tag)
+        console.print(f"\r[jarvis]Jarvis:[/jarvis] {response}           ")
+    else:
+        console.print()  # newline after streamed text
+
     memory.add_message("assistant", response)
-    speaker.speak(response)
+    speaker.speak(response, blocking=False)
 
 
-def voice_turn(config: dict, brain: Brain, speaker: Speaker, memory: ConversationMemory) -> None:
+def voice_turn(
+    config: dict,
+    brain: Brain,
+    speaker: Speaker,
+    memory: ConversationMemory,
+) -> None:
     try:
         from jarvis.core.listener import Listener
         listener = Listener(config)
-        print("[Jarvis] Listening… speak now.")
+        console.print("[info]Listening… speak now.[/info]")
         speaker.speak("Yes?", blocking=False)
         user_text = listener.transcribe_command()
         if user_text.strip():
+            console.print(f"[you]You (voice):[/you] {user_text}")
             run_turn(user_text, brain, speaker, memory)
         else:
-            print("[Jarvis] Didn't catch that.")
+            console.print("[info]Didn't catch that.[/info]")
     except Exception as e:
-        print(f"[Jarvis] Voice error: {e}")
-        print("  → Grant mic access: System Settings → Privacy & Security → Microphone")
+        console.print(f"[error]Voice error:[/error] {e}")
+        console.print("[info]Grant mic access: System Settings → Privacy & Security → Microphone[/info]")
 
 
 def main() -> None:
     config = load_config()
 
-    speaker = Speaker(config)
-    memory = ConversationMemory(config)
-    brain = Brain(config, memory)
+    speaker  = Speaker(config)
+    memory   = ConversationMemory(config)
+    brain    = Brain(config, memory)
 
     if not check_ollama(brain):
-        print(
-            "[Jarvis] ERROR: Ollama is not running.\n"
-            "  ollama serve   (then in another tab:  ollama pull llama3)"
+        console.print(
+            "[error]Ollama is not running.[/error]\n"
+            "[info]  ollama serve[/info]\n"
+            "[info]  ollama pull llama3[/info]"
         )
         sys.exit(1)
 
-    print("[Jarvis] Online. Type your message and press Enter.")
-    print("[Jarvis] Type  !  to activate voice input.\n")
+    console.rule("[jarvis]J A R V I S[/jarvis]")
+    console.print("[info]Type your message and press Enter.[/info]")
+    console.print("[info]Type [bold]![/bold] to activate voice input.[/info]")
+    console.print("[info]Type [bold]exit[/bold] to quit.[/info]\n")
     speaker.speak("Jarvis online.")
 
     try:
         while True:
             try:
-                user_input = input("You: ").strip()
+                console.print("[you]You:[/you] ", end="")
+                user_input = input().strip()
             except EOFError:
                 break
 
             if not user_input:
                 continue
-
             if user_input.lower() in ("exit", "quit", "bye"):
                 raise KeyboardInterrupt
-
             if user_input == "!":
                 voice_turn(config, brain, speaker, memory)
             else:
                 run_turn(user_input, brain, speaker, memory)
 
     except KeyboardInterrupt:
-        print("\n[Jarvis] Shutting down.")
+        console.print("\n[info]Shutting down.[/info]")
         speaker.speak("Goodbye.")
         memory.close()
 

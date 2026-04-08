@@ -6,3 +6,4 @@ duckduckgo-search>=6.0.0
 pyyaml>=6.0
 scipy>=1.11.0
 pynput>=1.8.0
+rich>=13.0.0
