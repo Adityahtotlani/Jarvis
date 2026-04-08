@@ -1,0 +1,23 @@
+jarvis:
+  wake_word: "jarvis"
+  hotkey: "<cmd>+<shift>+j"
+  voice: "Samantha"       # macOS say -v voice
+  speech_rate: 175        # words per minute for `say`
+
+whisper:
+  wake_model: "tiny"      # fast model for wake word detection
+  command_model: "base"   # better model for full command transcription
+  chunk_seconds: 2        # seconds per wake-word audio chunk
+  command_silence_threshold: 1.5  # seconds of silence to end command
+
+ollama:
+  model: "llama3"
+  host: "http://localhost:11434"
+  context_turns: 10       # number of past turns to include in prompt
+
+audio:
+  sample_rate: 16000
+  channels: 1
+
+memory:
+  db_path: "~/.jarvis/memory.db"
