@@ -25,7 +25,7 @@ from jarvis.memory.conversation import ConversationMemory
 
 def load_config() -> dict:
     config_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "config", "settings.yaml"
+        os.path.dirname(__file__), "..", "..", "config", "settings.yaml"
     )
     config_path = os.path.normpath(config_path)
     with open(config_path) as f:
