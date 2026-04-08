@@ -16,6 +16,14 @@ def open_app(name: str) -> str:
     return f"I couldn't open {name}. Make sure the app is installed."
 
 
+def open_url(url: str) -> str:
+    """Open a URL in the default browser."""
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    subprocess.run(["open", url], check=False)
+    return f"Opening {url}."
+
+
 def set_volume(level: int) -> str:
     """Set system volume to *level* (0–100) via AppleScript."""
     level = max(0, min(100, level))

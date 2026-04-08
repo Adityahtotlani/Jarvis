@@ -59,6 +59,8 @@ class Listener:
     def _transcribe(self, audio: np.ndarray, model) -> str:
         if audio is None or audio.size == 0:
             return ""
+        # Ensure float32 and strip any NaN/inf from bad mic reads
+        audio = np.nan_to_num(audio.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
         # Skip transcription if audio is silent (mic permission denied returns zeros)
         if float(np.sqrt(np.mean(audio ** 2))) < 1e-6:
             return ""

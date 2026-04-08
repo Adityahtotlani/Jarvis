@@ -12,17 +12,26 @@ You are Jarvis, a highly capable AI assistant modelled after the Iron Man AI.
 Speak concisely — your responses will be read aloud, so avoid markdown, bullet
 points, or long lists. Use plain sentences.
 
-When the user asks you to do one of the following, respond ONLY with the
-corresponding tag and nothing else:
-  - Search the web / look something up → [SEARCH: <query>]
-  - Open an application             → [OPEN: <app name>]
-  - Set the volume                  → [VOLUME: <0-100>]
-  - Run a shell command             → [CMD: <command>]
+IMPORTANT: For any action request, you MUST respond with ONLY the tag — no extra words.
 
-For everything else, respond naturally and helpfully as Jarvis."""
+Actions and their tags:
+  - Open an app by name (Chrome, Safari, Spotify, etc.) → [OPEN: <exact app name>]
+  - Open a website or URL                               → [URL: <full url>]
+  - Search the web                                      → [SEARCH: <query>]
+  - Set the volume (0-100)                              → [VOLUME: <number>]
+  - Run a terminal command                              → [CMD: <command>]
+
+Examples:
+  User: "open chrome"          → [OPEN: Google Chrome]
+  User: "open youtube"         → [URL: https://www.youtube.com]
+  User: "search the weather"   → [SEARCH: current weather]
+  User: "set volume to 50"     → [VOLUME: 50]
+
+For questions and conversation, respond naturally as Jarvis."""
 
 _SEARCH_RE = re.compile(r"\[SEARCH:\s*(.+?)\]", re.IGNORECASE)
 _OPEN_RE = re.compile(r"\[OPEN:\s*(.+?)\]", re.IGNORECASE)
+_URL_RE = re.compile(r"\[URL:\s*(.+?)\]", re.IGNORECASE)
 _VOLUME_RE = re.compile(r"\[VOLUME:\s*(\d+)\]", re.IGNORECASE)
 _CMD_RE = re.compile(r"\[CMD:\s*(.+?)\]", re.IGNORECASE)
 
@@ -85,6 +94,9 @@ class Brain:
 
         if m := _OPEN_RE.search(raw):
             return system_control.open_app(m.group(1).strip())
+
+        if m := _URL_RE.search(raw):
+            return system_control.open_url(m.group(1).strip())
 
         if m := _VOLUME_RE.search(raw):
             return system_control.set_volume(int(m.group(1)))
