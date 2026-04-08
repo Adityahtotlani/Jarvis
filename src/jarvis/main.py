@@ -1,15 +1,14 @@
 """Jarvis — entry point.
 
-Activation paths
-----------------
-1. Wake word: say "Jarvis" into the mic → Jarvis responds "Yes?"
-2. Hotkey:    press Cmd+Shift+J         → same behaviour, no wake word needed
+Modes
+-----
+- Default: type commands in the terminal (no mic needed)
+- Voice:   press Cmd+Shift+J to speak one command, then returns to text mode
 """
 
 import os
 import sys
 import threading
-import time
 
 import yaml
 
@@ -42,15 +41,27 @@ def check_ollama(brain: Brain) -> bool:
         return False
 
 
+def process(user_text: str, brain: Brain, speaker: Speaker, memory: ConversationMemory) -> None:
+    """Run a single turn: think → speak → remember."""
+    if not user_text.strip():
+        return
+    print(f"[You] {user_text}")
+    memory.add_message("user", user_text)
+    response = brain.process(user_text)
+    print(f"[Jarvis] {response}")
+    memory.add_message("assistant", response)
+    speaker.speak(response)
+
+
 def main() -> None:
     config = load_config()
+    hotkey_combo = config.get("jarvis", {}).get("hotkey", "<cmd>+<shift>+j")
 
     speaker = Speaker(config)
     memory = ConversationMemory(config)
-    listener = Listener(config)
     brain = Brain(config, memory)
 
-    # --- Check Ollama is reachable ----------------------------------------
+    # --- Check Ollama is reachable -------------------------------------------
     if not check_ollama(brain):
         print(
             "[Jarvis] ERROR: Ollama is not running.\n"
@@ -59,60 +70,58 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # --- Hotkey trigger event ----------------------------------------------
-    hotkey_event = threading.Event()
-    hotkey_listener = HotkeyListener(config, hotkey_event)
+    # --- Hotkey → voice mode trigger -----------------------------------------
+    voice_event = threading.Event()
+    hotkey_listener = HotkeyListener(config, voice_event)
     hotkey_listener.start()
 
-    hotkey_combo = config.get("jarvis", {}).get("hotkey", "<cmd>+<shift>+j")
-    print(f"[Jarvis] Online. Hotkey: {hotkey_combo}")
+    print(f"[Jarvis] Online. Type your commands below.")
+    print(f"[Jarvis] Press {hotkey_combo} at any time to speak instead.\n")
     speaker.speak("Jarvis online. How can I assist you?")
 
-    # --- Main loop ---------------------------------------------------------
+    # --- Main loop -----------------------------------------------------------
     try:
         while True:
-            # Wait for activation via wake word OR hotkey
-            activated_by_hotkey = False
-
-            # Poll for hotkey (non-blocking) while also listening for wake word
-            # Run wake-word listener in a thread so hotkey can interrupt
-            wake_detected = threading.Event()
-
-            def _wake_watcher():
-                listener.wait_for_wake_word()
-                wake_detected.set()
-
-            wake_thread = threading.Thread(target=_wake_watcher, daemon=True)
-            wake_thread.start()
-
-            while not wake_detected.is_set() and not hotkey_event.is_set():
-                time.sleep(0.05)
-
-            if hotkey_event.is_set():
-                hotkey_event.clear()
-                activated_by_hotkey = True
-            # If both fired, that's fine — proceed
-
-            speaker.speak("Yes?", blocking=False)
-            user_text = listener.transcribe_command()
-
-            if not user_text.strip():
+            # Non-blocking check for hotkey before showing the prompt
+            if voice_event.is_set():
+                voice_event.clear()
+                _handle_voice(config, brain, speaker, memory)
                 continue
 
-            print(f"[You] {user_text}")
-            memory.add_message("user", user_text)
+            try:
+                user_text = input("You: ").strip()
+            except EOFError:
+                break
 
-            response = brain.process(user_text)
-            print(f"[Jarvis] {response}")
-            memory.add_message("assistant", response)
+            if not user_text:
+                continue
 
-            speaker.speak(response)
+            if user_text.lower() in ("exit", "quit", "bye"):
+                raise KeyboardInterrupt
+
+            process(user_text, brain, speaker, memory)
 
     except KeyboardInterrupt:
         print("\n[Jarvis] Shutting down.")
         speaker.speak("Goodbye.")
         hotkey_listener.stop()
         memory.close()
+
+
+def _handle_voice(config: dict, brain: Brain, speaker: Speaker, memory: ConversationMemory) -> None:
+    """One round of voice input."""
+    try:
+        from jarvis.core.listener import Listener
+        listener = Listener(config)
+        print("[Jarvis] Listening... (speak now)")
+        speaker.speak("Yes?", blocking=False)
+        user_text = listener.transcribe_command()
+        if user_text.strip():
+            process(user_text, brain, speaker, memory)
+        else:
+            print("[Jarvis] Didn't catch that.")
+    except Exception as e:
+        print(f"[Jarvis] Voice error: {e}. Try granting mic access in System Settings.")
 
 
 if __name__ == "__main__":
