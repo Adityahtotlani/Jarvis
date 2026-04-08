@@ -9,6 +9,19 @@ import time
 
 from pynput import keyboard
 
+# Monkey-patch pynput for newer macOS versions that pass an extra
+# `injected` boolean to the keyboard event callback.
+try:
+    from pynput.keyboard import _darwin as _pynput_darwin
+    _orig = _pynput_darwin.Listener._handle_message
+
+    def _patched(self, proxy, event_type, event, refcon, *args):
+        _orig(self, proxy, event_type, event, refcon)
+
+    _pynput_darwin.Listener._handle_message = _patched
+except Exception:
+    pass
+
 
 class HotkeyListener:
     def __init__(self, config: dict, trigger_event: threading.Event):

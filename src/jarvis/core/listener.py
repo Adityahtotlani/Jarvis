@@ -61,11 +61,16 @@ class Listener:
             return ""
         # Ensure float32 and strip any NaN/inf from bad mic reads
         audio = np.nan_to_num(audio.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-        # Skip transcription if audio is silent (mic permission denied returns zeros)
-        if float(np.sqrt(np.mean(audio ** 2))) < 1e-6:
+        # Skip if silent or corrupted (mic permission denied)
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        if rms < 1e-6 or np.isnan(rms):
             return ""
-        result = model.transcribe(audio, fp16=False, language="en")
-        return result.get("text", "").strip().lower()
+        try:
+            result = model.transcribe(audio, fp16=False, language="en")
+            return result.get("text", "").strip().lower()
+        except (ValueError, RuntimeError):
+            # Corrupted audio causes NaN logits in Whisper — skip silently
+            return ""
 
     # ------------------------------------------------------------------
     # Public API
