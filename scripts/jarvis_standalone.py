@@ -28,11 +28,26 @@ RUN
 MODEL         = "llama3.2:1b"
 OLLAMA_HOST   = "http://localhost:11434"
 CONTEXT_TURNS = 6
-VOICE_NAME    = "Samantha"        # macOS say -v voice
-SPEECH_RATE   = 175               # words per minute
+SPEECH_RATE   = 165               # words per minute (slightly slower = gravitas)
 USER_NAME     = "sir"             # how JARVIS addresses you
 DB_PATH       = "~/.jarvis/memory.db"
 NOTES_PATH    = "~/.jarvis/notes.txt"
+
+# ── TTS config ──────────────────────────────────────────────────────────────
+# Best free voice : pip install edge-tts   → auto-selects en-GB-RyanNeural
+# Best quality    : export ELEVENLABS_API_KEY=sk-...  (free tier available)
+#
+# Other great edge-tts voices:
+#   en-GB-RyanNeural    ← recommended (British male, authoritative)
+#   en-GB-ThomasNeural  ← British male, slightly warmer
+#   en-AU-WilliamNeural ← Australian male, deep and clear
+# ────────────────────────────────────────────────────────────────────────────
+TTS_ENGINE           = "auto"                     # auto | edge | elevenlabs | say | espeak
+EDGE_VOICE           = "en-GB-RyanNeural"         # Microsoft Neural — closest free JARVIS voice
+EDGE_RATE            = "-8%"                      # slower = more gravitas
+SAY_VOICE            = "Daniel"                   # macOS built-in British male fallback
+ELEVENLABS_VOICE_ID  = "pNInz6obpgDQGcFmaJgB"    # "Adam" — deep, authoritative
+ELEVENLABS_API_KEY   = os.environ.get("ELEVENLABS_API_KEY", "")
 
 # ──────────────────────────────────────────────
 # STDLIB
@@ -118,16 +133,18 @@ else:
 # ──────────────────────────────────────────────
 # TTS
 # ──────────────────────────────────────────────
-def _detect_tts() -> str:
-    if platform.system() == "Darwin" and shutil.which("say"): return "say"
+def _auto_detect_tts() -> str:
+    if ELEVENLABS_API_KEY:                                      return "elevenlabs"
+    try: import edge_tts; return "edge"                        # noqa: F401, E702
+    except ImportError: pass
+    if platform.system() == "Darwin" and shutil.which("say"):  return "say"
     for b in ("espeak-ng", "espeak"):
-        if shutil.which(b): return b
-    try:
-        import pyttsx3; return "pyttsx3"  # noqa: F401, E702
+        if shutil.which(b):                                    return b
+    try: import pyttsx3; return "pyttsx3"                      # noqa: F401, E702
     except ImportError: pass
     return "none"
 
-_TTS = _detect_tts()
+_TTS      = TTS_ENGINE if TTS_ENGINE != "auto" else _auto_detect_tts()
 _TTS_LOCK = threading.Lock()
 _pyttsx3_engine = None
 
@@ -140,16 +157,83 @@ if _TTS == "pyttsx3":
         _TTS = "none"
 
 
+def _play_mp3(path: str) -> None:
+    """Play an MP3 using the best available player."""
+    if platform.system() == "Darwin":
+        subprocess.run(["afplay", path], check=False, capture_output=True); return
+    for player, args in [
+        ("mpg123",  ["-q", path]),
+        ("ffplay",  ["-nodisp", "-autoexit", "-loglevel", "quiet", path]),
+        ("mpg321",  [path]),
+        ("cvlc",    ["--play-and-exit", "--quiet", path]),
+    ]:
+        if shutil.which(player):
+            subprocess.run([player, *args], check=False, capture_output=True); return
+
+
+def _speak_edge(text: str) -> None:
+    import asyncio, edge_tts, tempfile  # noqa: E401
+    tmp = tempfile.mktemp(suffix=".mp3")
+    try:
+        async def _gen():
+            await edge_tts.Communicate(text, EDGE_VOICE, rate=EDGE_RATE).save(tmp)
+        loop = asyncio.new_event_loop()
+        try: loop.run_until_complete(_gen())
+        finally: loop.close()
+        _play_mp3(tmp)
+    except Exception:
+        _speak_say(text)  # fallback
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
+
+
+def _speak_elevenlabs(text: str) -> None:
+    import tempfile  # noqa: E401
+    tmp = tempfile.mktemp(suffix=".mp3")
+    try:
+        import requests
+        r = requests.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+            json={"text": text, "model_id": "eleven_multilingual_v2",
+                  "voice_settings": {"stability": 0.60, "similarity_boost": 0.85,
+                                     "style": 0.15, "use_speaker_boost": True}},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            with open(tmp, "wb") as f: f.write(r.content)
+            _play_mp3(tmp)
+        else:
+            _speak_edge(text)  # quota/auth fallback
+    except Exception:
+        _speak_edge(text)
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
+
+
+def _speak_say(text: str) -> None:
+    with _TTS_LOCK:
+        subprocess.run(["say", "-v", SAY_VOICE, "-r", str(SPEECH_RATE), text],
+                       check=False, capture_output=True)
+
+
 def speak(text: str, blocking: bool = True) -> None:
     if not text or _TTS == "none": return
-    if _TTS == "pyttsx3":
-        if _pyttsx3_engine:
-            _pyttsx3_engine.say(text); _pyttsx3_engine.runAndWait()
-        return
-    cmd = (["say", "-v", VOICE_NAME, "-r", str(SPEECH_RATE), text] if _TTS == "say"
-           else [_TTS, "-s", str(int(SPEECH_RATE * 0.85)), text])
+
     def _run():
-        with _TTS_LOCK: subprocess.run(cmd, check=False, capture_output=True)
+        if _TTS == "edge":        _speak_edge(text)
+        elif _TTS == "elevenlabs": _speak_elevenlabs(text)
+        elif _TTS == "say":        _speak_say(text)
+        elif _TTS == "pyttsx3":
+            if _pyttsx3_engine:
+                _pyttsx3_engine.say(text); _pyttsx3_engine.runAndWait()
+        else:  # espeak-ng / espeak
+            with _TTS_LOCK:
+                subprocess.run([_TTS, "-s", str(int(SPEECH_RATE*0.85)), text],
+                               check=False, capture_output=True)
+
     if blocking: _run()
     else: threading.Thread(target=_run, daemon=True).start()
 
@@ -775,7 +859,7 @@ def _boot(voice_mode):
                 ("J . A . R . V . I . S\n", "bold cyan"),
                 ("Just A Rather Very Intelligent System\n\n", "dim cyan"),
                 (f"  Model   : {MODEL}\n", "dim white"),
-                (f"  TTS     : {_TTS}\n", "dim white"),
+                (f"  TTS     : {_TTS} ({EDGE_VOICE if _TTS=='edge' else ELEVENLABS_VOICE_ID if _TTS=='elevenlabs' else SAY_VOICE if _TTS=='say' else _TTS})\n", "dim white"),
                 (f"  Voice   : {'always-on' if voice_mode else 'manual (!)'}\n", "dim white"),
                 (f"  Memory  : {DB_PATH}\n", "dim white"),
             ),

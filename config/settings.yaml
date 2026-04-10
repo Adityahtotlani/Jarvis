@@ -1,20 +1,50 @@
 jarvis:
   wake_word: "jarvis"
   hotkey: "<cmd>+<shift>+j"
-  voice: "Samantha"        # macOS say -v voice (ignored on Linux)
-  speech_rate: 175         # words per minute
-  user_name: "sir"         # how J.A.R.V.I.S. addresses the user
+  voice: "Daniel"           # macOS say fallback voice (British male)
+  speech_rate: 165          # words per minute (slightly slower = JARVIS gravitas)
+  user_name: "sir"          # how J.A.R.V.I.S. addresses you
+
+# ─── TTS Engine ─────────────────────────────────────────────────────────────
+# Priority (auto mode): elevenlabs → edge → say → espeak → none
+#
+# BEST FREE (no API key):
+#   pip install edge-tts
+#   Engine will auto-select en-GB-RyanNeural — British male, closest to JARVIS
+#
+# BEST QUALITY (ElevenLabs):
+#   Set ELEVENLABS_API_KEY env var, or uncomment elevenlabs_api_key below.
+#   Then: pip install requests
+#
+# Other great edge-tts voices for JARVIS:
+#   en-GB-RyanNeural    — British male, authoritative (recommended)
+#   en-GB-ThomasNeural  — British male, slightly warmer
+#   en-AU-WilliamNeural — Australian male, clear and deep
+# ─────────────────────────────────────────────────────────────────────────────
+tts:
+  engine: "auto"                          # auto | edge | elevenlabs | say | espeak
+
+  # edge-tts (free Microsoft Neural TTS)
+  edge_voice: "en-GB-RyanNeural"         # closest free voice to JARVIS
+  edge_rate:  "-8%"                      # slower = more gravitas
+
+  # ElevenLabs (optional — premium quality)
+  elevenlabs_voice_id: "pNInz6obpgDQGcFmaJgB"   # "Adam" — deep, authoritative
+  # elevenlabs_api_key: ""               # or export ELEVENLABS_API_KEY=sk-...
+
+  # macOS say fallback
+  say_voice: "Daniel"                    # British male (built-in macOS)
 
 whisper:
-  wake_model: "tiny"       # fast model for wake-word detection
-  command_model: "base"    # higher-quality model for command transcription
-  chunk_seconds: 2         # seconds per wake-word audio chunk
-  command_silence_threshold: 1.5  # seconds of silence to end a command
+  wake_model: "tiny"
+  command_model: "base"
+  chunk_seconds: 2
+  command_silence_threshold: 1.5
 
 ollama:
-  model: "llama3.2:1b"     # fast 1B model — swap to llama3 for higher quality
+  model: "llama3.2:1b"
   host: "http://localhost:11434"
-  context_turns: 6         # fewer turns = faster inference
+  context_turns: 6
 
 audio:
   sample_rate: 16000
