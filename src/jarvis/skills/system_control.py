@@ -1,5 +1,6 @@
 """System control skill — open apps, run safe commands, adjust volume on macOS."""
 
+import platform
 import shlex
 import subprocess
 
@@ -60,3 +61,38 @@ def run_command(cmd: str) -> str:
     if len(output) > 500:
         return output[:500] + "… (truncated)"
     return output or "Done."
+
+
+def lock_screen() -> str:
+    """Lock the workstation."""
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(
+                ["/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend"],
+                check=False,
+            )
+        elif system == "Linux":
+            for cmd in (["loginctl", "lock-session"], ["xdg-screensaver", "lock"]):
+                if subprocess.run(cmd, check=False).returncode == 0:
+                    break
+        else:
+            return "Screen locking is not supported on this platform, sir."
+        return "Locking the screen, sir."
+    except Exception:
+        return "I couldn't lock the screen, sir."
+
+
+def sleep_computer() -> str:
+    """Put the computer to sleep."""
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(["pmset", "sleepnow"], check=False)
+        elif system == "Linux":
+            subprocess.run(["systemctl", "suspend"], check=False)
+        else:
+            return "Sleep is not supported on this platform, sir."
+        return "Going to sleep, sir."
+    except Exception:
+        return "I couldn't put the computer to sleep, sir."

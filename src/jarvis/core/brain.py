@@ -7,14 +7,20 @@ import ollama
 
 from jarvis.memory.conversation import ConversationMemory
 from jarvis.skills import system_control, web_search
+from jarvis.skills import timer as timer_skill
 from jarvis.skills.briefing import get_briefing
 from jarvis.skills.clipboard import read_clipboard, write_clipboard
+from jarvis.skills.convert import convert as convert_units
+from jarvis.skills.dictionary import define as define_word
 from jarvis.skills.files import read_file, safe_python
+from jarvis.skills.jokes import get_joke
 from jarvis.skills.lookup import translate, wikipedia
+from jarvis.skills.market import get_crypto, get_stock
 from jarvis.skills.music import control as music_control
 from jarvis.skills.reminders import list_reminders, parse_remind_arg, set_reminder
 from jarvis.skills.system_monitor import get_system_info
 from jarvis.skills.utils import add_note, calculate, get_date, get_time, read_notes
+from jarvis.skills.vision import analyze_screen
 from jarvis.skills.weather import get_weather
 
 _SYSTEM_PROMPT = """\
@@ -58,6 +64,17 @@ CRITICAL RULE: For ANY action request, respond with ONLY the matching tag — no
   [TRANSLATE: <text> to <lang>]   translate text to another language
   [FILE: <path>]                  read and summarise a file
   [PYTHON: <code>]                execute a Python expression or snippet
+  [VISION]                        describe what's currently on screen
+  [VISION: <question>]            answer a question about what's on screen
+  [STOCK: <symbol>]               fetch a stock quote
+  [CRYPTO: <coin>]                fetch a crypto price
+  [CONVERT: <expression>]         convert units, e.g. '5 miles to km'
+  [DEFINE: <word>]                look up a word's definition
+  [TIMER: <duration>]             start a countdown timer
+  [TIMERS]                        list active countdown timers
+  [JOKE]                          tell a joke
+  [LOCK]                          lock the screen
+  [SLEEP]                         put the computer to sleep
 
 For conversation, questions, and greetings — respond naturally as J.A.R.V.I.S.\
 """
@@ -65,7 +82,8 @@ For conversation, questions, and greetings — respond naturally as J.A.R.V.I.S.
 _TOOL_RE = re.compile(
     r"\[(OPEN|URL|SEARCH|NEWS|WEATHER|VOLUME|MUSIC|CMD|NOTE|NOTES|TIME|DATE|CALC"
     r"|SYSINFO|REMIND|REMINDERS|BRIEF|REMEMBER|RECALL|FORGET|CLIP|COPY|SCREENSHOT"
-    r"|WIKI|TRANSLATE|FILE|PYTHON)"
+    r"|WIKI|TRANSLATE|FILE|PYTHON"
+    r"|VISION|STOCK|CRYPTO|CONVERT|DEFINE|TIMER|TIMERS|JOKE|LOCK|SLEEP)"
     r"(?::\s*(.+?))?\]",
     re.IGNORECASE | re.DOTALL,
 )
@@ -199,6 +217,26 @@ class Brain:
         if tag == "SEARCH":
             context = web_search.search(arg)
             return self._summarise(original_query, context, stream_callback)
+
+        # Vision
+        if tag == "VISION":         return analyze_screen(arg or "")
+
+        # Market data
+        if tag == "STOCK":          return get_stock(arg)
+        if tag == "CRYPTO":         return get_crypto(arg)
+
+        # Knowledge helpers
+        if tag == "CONVERT":        return convert_units(arg)
+        if tag == "DEFINE":         return define_word(arg)
+        if tag == "JOKE":           return get_joke()
+
+        # Timers
+        if tag == "TIMER":          return timer_skill.start(arg)
+        if tag == "TIMERS":         return timer_skill.list_active()
+
+        # Power
+        if tag == "LOCK":           return system_control.lock_screen()
+        if tag == "SLEEP":          return system_control.sleep_computer()
 
         return raw
 
