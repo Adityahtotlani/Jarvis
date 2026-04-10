@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 J.A.R.V.I.S. — Just A Rather Very Intelligent System
-Single-file edition. Download and run — no project structure needed.
+Single-file edition. One download, one run.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SETUP (one time)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   pip install ollama rich duckduckgo-search requests psutil
 
-  ollama pull llama3.2:1b        # fast (~1 GB, recommended)
+  ollama pull llama3.2:1b        # fast — recommended (~800 MB)
   # or: ollama pull llama3       # higher quality (~4 GB)
 
 OPTIONAL — voice input:
@@ -18,29 +18,24 @@ OPTIONAL — voice input:
 
 RUN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  python3 jarvis_standalone.py
-
-USAGE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Type a message and press Enter.
-  Type  !  to activate voice input (requires optional deps).
-  Type  exit  to quit.
+  python3 jarvis_standalone.py              # text mode
+  python3 jarvis_standalone.py --voice      # always-on voice mode
 """
 
 # ──────────────────────────────────────────────
-# CONFIG  — edit these to taste
+# CONFIG — edit to taste
 # ──────────────────────────────────────────────
-MODEL         = "llama3.2:1b"          # ollama model name
+MODEL         = "llama3.2:1b"
 OLLAMA_HOST   = "http://localhost:11434"
-CONTEXT_TURNS = 6                       # past turns kept in prompt
-VOICE_NAME    = "Samantha"             # macOS say -v voice
-SPEECH_RATE   = 175                    # words per minute
-USER_NAME     = "sir"                  # how JARVIS addresses you
-DB_PATH       = "~/.jarvis/memory.db"  # SQLite for conversation + facts
-NOTES_PATH    = "~/.jarvis/notes.txt"  # plain-text notes file
+CONTEXT_TURNS = 6
+VOICE_NAME    = "Samantha"        # macOS say -v voice
+SPEECH_RATE   = 175               # words per minute
+USER_NAME     = "sir"             # how JARVIS addresses you
+DB_PATH       = "~/.jarvis/memory.db"
+NOTES_PATH    = "~/.jarvis/notes.txt"
 
 # ──────────────────────────────────────────────
-# STDLIB IMPORTS
+# STDLIB
 # ──────────────────────────────────────────────
 import math
 import os
@@ -58,7 +53,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # ──────────────────────────────────────────────
-# OPTIONAL IMPORTS
+# OPTIONAL DEPS
 # ──────────────────────────────────────────────
 try:
     import ollama as _ollama
@@ -68,7 +63,9 @@ except ImportError:
 
 try:
     from rich.console import Console
+    from rich.live import Live
     from rich.panel import Panel
+    from rich.table import Table
     from rich.text import Text
     from rich.theme import Theme
     _HAS_RICH = True
@@ -93,14 +90,12 @@ try:
 except ImportError:
     _HAS_DDG = False
 
-# readline history (best-effort)
+# readline history
 try:
     import readline
     _hist = os.path.expanduser("~/.jarvis_history")
-    try:
-        readline.read_history_file(_hist)
-    except FileNotFoundError:
-        pass
+    try: readline.read_history_file(_hist)
+    except FileNotFoundError: pass
     import atexit
     atexit.register(readline.write_history_file, _hist)
 except ImportError:
@@ -110,89 +105,57 @@ except ImportError:
 # CONSOLE
 # ──────────────────────────────────────────────
 if _HAS_RICH:
-    _theme = Theme({
-        "jarvis": "bold cyan",
-        "you":    "bold green",
-        "info":   "dim white",
-        "error":  "bold red",
-        "warn":   "bold yellow",
-    })
+    _theme = Theme({"jarvis": "bold cyan", "you": "bold green",
+                    "info": "dim white", "error": "bold red", "warn": "bold yellow"})
     console = Console(theme=_theme)
-
-    def _print(msg: str, style: str = "") -> None:
-        console.print(msg)
-
-    def _print_inline(msg: str) -> None:
-        console.print(msg, end="")
+    def _print(msg):    console.print(msg)
+    def _printx(msg):   console.print(msg, end="")
 else:
-    def _print(msg: str, style: str = "") -> None:
-        # Strip rich markup tags for plain output
-        clean = re.sub(r"\[/?[^\]]*\]", "", msg)
-        print(clean)
-
-    def _print_inline(msg: str) -> None:
-        clean = re.sub(r"\[/?[^\]]*\]", "", msg)
-        print(clean, end="", flush=True)
+    def _print(msg):    print(re.sub(r"\[/?[^\]]*\]", "", msg))
+    def _printx(msg):   print(re.sub(r"\[/?[^\]]*\]", "", msg), end="", flush=True)
 
 
 # ──────────────────────────────────────────────
-# TTS SPEAKER
+# TTS
 # ──────────────────────────────────────────────
 def _detect_tts() -> str:
-    if platform.system() == "Darwin" and shutil.which("say"):
-        return "say"
+    if platform.system() == "Darwin" and shutil.which("say"): return "say"
     for b in ("espeak-ng", "espeak"):
-        if shutil.which(b):
-            return b
+        if shutil.which(b): return b
     try:
-        import pyttsx3  # noqa: F401
-        return "pyttsx3"
-    except ImportError:
-        pass
+        import pyttsx3; return "pyttsx3"  # noqa: F401, E702
+    except ImportError: pass
     return "none"
 
-_TTS_ENGINE = _detect_tts()
-_TTS_LOCK   = threading.Lock()
+_TTS = _detect_tts()
+_TTS_LOCK = threading.Lock()
 _pyttsx3_engine = None
 
-def _init_pyttsx3():
-    global _pyttsx3_engine
+if _TTS == "pyttsx3":
     try:
         import pyttsx3
         _pyttsx3_engine = pyttsx3.init()
         _pyttsx3_engine.setProperty("rate", SPEECH_RATE)
     except Exception:
-        pass
-
-if _TTS_ENGINE == "pyttsx3":
-    _init_pyttsx3()
+        _TTS = "none"
 
 
 def speak(text: str, blocking: bool = True) -> None:
-    if not text or _TTS_ENGINE == "none":
-        return
-    if _TTS_ENGINE == "pyttsx3":
+    if not text or _TTS == "none": return
+    if _TTS == "pyttsx3":
         if _pyttsx3_engine:
-            _pyttsx3_engine.say(text)
-            _pyttsx3_engine.runAndWait()
+            _pyttsx3_engine.say(text); _pyttsx3_engine.runAndWait()
         return
-    if _TTS_ENGINE == "say":
-        cmd = ["say", "-v", VOICE_NAME, "-r", str(SPEECH_RATE), text]
-    else:
-        cmd = [_TTS_ENGINE, "-s", str(int(SPEECH_RATE * 0.85)), text]
-
+    cmd = (["say", "-v", VOICE_NAME, "-r", str(SPEECH_RATE), text] if _TTS == "say"
+           else [_TTS, "-s", str(int(SPEECH_RATE * 0.85)), text])
     def _run():
-        with _TTS_LOCK:
-            subprocess.run(cmd, check=False, capture_output=True)
-
-    if blocking:
-        _run()
-    else:
-        threading.Thread(target=_run, daemon=True).start()
+        with _TTS_LOCK: subprocess.run(cmd, check=False, capture_output=True)
+    if blocking: _run()
+    else: threading.Thread(target=_run, daemon=True).start()
 
 
 # ──────────────────────────────────────────────
-# MEMORY  (SQLite)
+# MEMORY
 # ──────────────────────────────────────────────
 _db_path = Path(os.path.expanduser(DB_PATH))
 _db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,243 +172,265 @@ _db.executescript("""
 """)
 _db.commit()
 
-
-def mem_add(role: str, content: str) -> None:
-    _db.execute(
-        "INSERT INTO conversations (role,content,ts) VALUES (?,?,?)",
-        (role, content, datetime.now(timezone.utc).isoformat()),
-    )
+def mem_add(role, content):
+    _db.execute("INSERT INTO conversations(role,content,ts) VALUES(?,?,?)",
+                (role, content, datetime.now(timezone.utc).isoformat()))
     _db.commit()
 
-
-def mem_recent(n: int = CONTEXT_TURNS) -> list[dict]:
+def mem_recent(n=CONTEXT_TURNS):
     rows = _db.execute(
         "SELECT role,content FROM conversations ORDER BY id DESC LIMIT ?", (n,)
     ).fetchall()
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
-
-def mem_remember(fact: str) -> str:
-    if not fact:
-        return "Nothing to remember, sir."
-    _db.execute(
-        "INSERT OR IGNORE INTO facts (content,ts) VALUES (?,?)",
-        (fact.strip(), datetime.now(timezone.utc).isoformat()),
-    )
+def mem_remember(fact):
+    if not fact: return f"Nothing to remember, {USER_NAME}."
+    _db.execute("INSERT OR IGNORE INTO facts(content,ts) VALUES(?,?)",
+                (fact.strip(), datetime.now(timezone.utc).isoformat()))
     _db.commit()
-    return "Understood, sir. I've made a note of that."
+    return f"Understood, {USER_NAME}. I've made a note of that."
 
-
-def mem_recall() -> str:
+def mem_recall():
     rows = _db.execute("SELECT content FROM facts ORDER BY id ASC").fetchall()
-    if not rows:
-        return f"I have no stored facts about you, {USER_NAME}."
+    if not rows: return f"I have no stored facts about you, {USER_NAME}."
     return f"Here is what I know about you, {USER_NAME}: " + ". ".join(r[0] for r in rows) + "."
+
+def mem_forget(kw):
+    cur = _db.execute("DELETE FROM facts WHERE content LIKE ?", (f"%{kw}%",))
+    _db.commit()
+    n = cur.rowcount
+    return (f"Removed {n} fact{'s' if n!=1 else ''}, {USER_NAME}." if n
+            else f"No stored facts matched that, {USER_NAME}.")
+
+def mem_history(n=10):
+    return mem_recent(n)
 
 
 # ──────────────────────────────────────────────
 # SKILLS
 # ──────────────────────────────────────────────
 
-# — Time / Date —
-def skill_time() -> str:
-    return "The time is " + datetime.now().strftime("%I:%M %p") + "."
+def _tod():
+    h = datetime.now().hour
+    return "morning" if h < 12 else "afternoon" if h < 17 else "evening"
 
-def skill_date() -> str:
-    return "Today is " + datetime.now().strftime("%A, %B %d, %Y") + "."
+def _greeting():
+    m = {"morning": "Good morning", "afternoon": "Good afternoon", "evening": "Good evening"}
+    return m[_tod()]
 
+def skill_time():  return "The time is " + datetime.now().strftime("%I:%M %p") + "."
+def skill_date():  return "Today is " + datetime.now().strftime("%A, %B %d, %Y") + "."
 
-# — Calculator —
 _SAFE_MATH = {k: v for k, v in math.__dict__.items() if not k.startswith("_")}
 _SAFE_MATH.update({"abs": abs, "round": round, "int": int, "float": float})
 
-def skill_calc(expr: str) -> str:
+def skill_calc(expr):
     try:
-        safe = "".join(c for c in expr if c in "0123456789+-*/.() eE,^")
-        safe = safe.replace("^", "**")
-        result = eval(safe, {"__builtins__": {}}, _SAFE_MATH)  # noqa: S307
-        return f"The answer is {result}."
+        safe = "".join(c for c in expr if c in "0123456789+-*/.() eE,^").replace("^", "**")
+        return f"The answer is {eval(safe, {'__builtins__': {}}, _SAFE_MATH)}."  # noqa: S307
     except Exception:
-        return "I couldn't calculate that, sir."
+        return f"I couldn't calculate that, {USER_NAME}."
 
+_notes = Path(os.path.expanduser(NOTES_PATH))
 
-# — Notes —
-_notes_file = Path(os.path.expanduser(NOTES_PATH))
-
-def skill_note(text: str) -> str:
-    _notes_file.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    with open(_notes_file, "a") as f:
-        f.write(f"[{ts}] {text}\n")
+def skill_note(text):
+    _notes.parent.mkdir(parents=True, exist_ok=True)
+    with open(_notes, "a") as f:
+        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {text}\n")
     return f"Note saved: {text}"
 
-def skill_notes(limit: int = 5) -> str:
-    if not _notes_file.exists():
-        return "You have no notes, sir."
-    lines = _notes_file.read_text().strip().splitlines()
-    if not lines:
-        return "You have no notes, sir."
-    recent = lines[-limit:]
-    return "Your recent notes: " + ". ".join(ln.split("] ", 1)[-1] for ln in recent) + "."
+def skill_notes(limit=5):
+    if not _notes.exists(): return f"You have no notes, {USER_NAME}."
+    lines = _notes.read_text().strip().splitlines()
+    if not lines: return f"You have no notes, {USER_NAME}."
+    return "Your recent notes: " + ". ".join(ln.split("] ",1)[-1] for ln in lines[-limit:]) + "."
 
-
-# — System info —
-def skill_sysinfo() -> str:
-    if not _HAS_PSUTIL:
-        return "System monitoring unavailable — install psutil, sir."
-    parts = []
-    parts.append(f"CPU at {_psutil.cpu_percent(interval=0.5):.0f} percent")
+def skill_sysinfo():
+    if not _HAS_PSUTIL: return f"System monitoring unavailable — install psutil, {USER_NAME}."
+    parts = [f"CPU at {_psutil.cpu_percent(interval=0.5):.0f} percent"]
     ram = _psutil.virtual_memory()
     parts.append(f"RAM at {ram.percent:.0f} percent with {ram.available/(1024**3):.1f} GB free")
     try:
-        disk = _psutil.disk_usage("/")
-        parts.append(f"disk at {disk.percent:.0f} percent")
-    except Exception:
-        pass
+        d = _psutil.disk_usage("/"); parts.append(f"disk at {d.percent:.0f} percent")
+    except Exception: pass
     try:
-        bat = _psutil.sensors_battery()
-        if bat:
-            parts.append(f"battery at {bat.percent:.0f} percent, {'charging' if bat.power_plugged else 'on battery'}")
-    except Exception:
-        pass
+        b = _psutil.sensors_battery()
+        if b: parts.append(f"battery at {b.percent:.0f} percent, {'charging' if b.power_plugged else 'on battery'}")
+    except Exception: pass
     return "All systems nominal. " + ", ".join(parts) + "."
 
-
-# — Weather —
-def skill_weather(location: str = "") -> str:
-    if not _HAS_REQUESTS:
-        return "Weather unavailable — install requests, sir."
-    loc = location.strip().replace(" ", "+")
+def skill_weather(location=""):
+    if not _HAS_REQUESTS: return f"Weather unavailable — install requests, {USER_NAME}."
     try:
-        r = _requests.get(
-            f"https://wttr.in/{loc}?format=3",
-            timeout=8,
-            headers={"User-Agent": "Jarvis/1.0"},
-        )
+        r = _requests.get(f"https://wttr.in/{location.strip().replace(' ','+')}?format=3",
+                         timeout=8, headers={"User-Agent": "Jarvis/1.0"})
         r.raise_for_status()
-        text = re.sub(r"[^\x00-\x7F]+", "", r.text).strip()
-        return f"Current conditions: {text}."
+        return "Current conditions: " + re.sub(r"[^\x00-\x7F]+", "", r.text).strip() + "."
     except Exception:
-        return "I couldn't retrieve weather information, sir."
+        return f"I couldn't retrieve weather information, {USER_NAME}."
 
-
-# — Web search —
-def skill_search(query: str) -> str:
-    if not _HAS_DDG:
-        return "Web search unavailable — install duckduckgo-search, sir."
-    results = []
+def skill_search(query):
+    if not _HAS_DDG: return f"Web search unavailable — install duckduckgo-search, {USER_NAME}."
     try:
-        with DDGS() as ddgs:
-            for hit in ddgs.text(query, max_results=5):
-                body = hit.get("body", "").strip()
-                if body:
-                    results.append(body)
-                if len(results) >= 3:
-                    break
+        results = []
+        with DDGS() as d:
+            for h in d.text(query, max_results=5):
+                b = h.get("body","").strip()
+                if b: results.append(b)
+                if len(results) >= 3: break
+        return " ".join(results) if results else f"Nothing found for that, {USER_NAME}."
     except Exception:
-        pass
-    return " ".join(results) if results else "I couldn't find anything relevant, sir."
+        return f"Search failed, {USER_NAME}."
 
+def skill_open(app):
+    cmd = ["open", "-a", app] if platform.system() == "Darwin" else ["xdg-open", app]
+    r = subprocess.run(cmd, capture_output=True)
+    return f"Opening {app}." if r.returncode == 0 else f"I couldn't open {app}, {USER_NAME}."
 
-# — System control —
-def skill_open(app: str) -> str:
-    if platform.system() == "Darwin":
-        r = subprocess.run(["open", "-a", app], capture_output=True)
-        return f"Opening {app}." if r.returncode == 0 else f"I couldn't open {app}, sir."
-    r = subprocess.run(["xdg-open", app], capture_output=True)
-    return f"Opening {app}."
-
-def skill_url(url: str) -> str:
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+def skill_url(url):
+    if not url.startswith(("http://","https://")): url = "https://" + url
     cmd = ["open", url] if platform.system() == "Darwin" else ["xdg-open", url]
     subprocess.run(cmd, check=False)
     return f"Opening {url}."
 
-def skill_volume(level: int) -> str:
+def skill_volume(level):
     level = max(0, min(100, level))
     if platform.system() == "Darwin":
-        subprocess.run(["osascript", "-e", f"set volume output volume {level}"], check=False)
+        subprocess.run(["osascript","-e",f"set volume output volume {level}"], check=False)
     return f"Volume set to {level} percent."
 
-def skill_cmd(cmd: str) -> str:
-    blocked = [";", "&&", "||", "|", ">", "<", "`", "$", "\n", "$(", "${"]
-    for tok in blocked:
-        if tok in cmd:
-            return "That command looks unsafe, sir. I won't run it."
-    try:
-        args = shlex.split(cmd)
-    except ValueError:
-        return "I couldn't parse that command, sir."
-    result = subprocess.run(args, capture_output=True, text=True, timeout=15)
-    out = (result.stdout or result.stderr or "Done.").strip()
-    return (out[:500] + "…") if len(out) > 500 else out or "Done."
+def skill_cmd(cmd):
+    blocked = [";","&&","||","|",">","<","`","$","\n","$(","${"]
+    for t in blocked:
+        if t in cmd: return f"That command looks unsafe, {USER_NAME}. I won't run it."
+    try: args = shlex.split(cmd)
+    except ValueError: return f"I couldn't parse that command, {USER_NAME}."
+    r = subprocess.run(args, capture_output=True, text=True, timeout=15)
+    out = (r.stdout or r.stderr or "Done.").strip()
+    return (out[:500]+"…") if len(out)>500 else out or "Done."
 
-
-# — Reminders —
+# Reminders
 _reminders: list[dict] = []
 _rem_lock = threading.Lock()
-_rem_counter = 0
+_rem_ctr = 0
 fired_queue: queue.Queue = queue.Queue()
 
-def skill_remind(arg: str) -> str:
-    global _rem_counter
+def skill_remind(arg):
+    global _rem_ctr
     m = re.search(r"^(.+?)\s+in\s+(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|m)?$", arg.strip(), re.I)
-    if m:
-        message, minutes = m.group(1).strip(), float(m.group(2))
+    if m: msg, mins = m.group(1).strip(), float(m.group(2))
     else:
         nums = re.findall(r"\d+(?:\.\d+)?", arg)
-        if nums:
-            minutes = float(nums[-1])
-            message = arg[:arg.rfind(nums[-1])].rstrip().rstrip("in").rstrip() or arg
-        else:
-            message, minutes = arg, 5.0
-
+        mins = float(nums[-1]) if nums else 5.0
+        msg = (arg[:arg.rfind(nums[-1])].rstrip().rstrip("in").rstrip() if nums else arg) or arg
     with _rem_lock:
-        _rem_counter += 1
-        rid = _rem_counter
-
+        _rem_ctr += 1; rid = _rem_ctr
     def _fire():
-        with _rem_lock:
-            _reminders[:] = [r for r in _reminders if r["id"] != rid]
-        fired_queue.put(f"Reminder, {USER_NAME}: {message}")
-
-    timer = threading.Timer(minutes * 60, _fire)
-    timer.daemon = True
-    timer.start()
-    fire_at = time.time() + minutes * 60
+        with _rem_lock: _reminders[:] = [r for r in _reminders if r["id"]!=rid]
+        fired_queue.put(f"Reminder, {USER_NAME}: {msg}")
+    timer = threading.Timer(mins*60, _fire); timer.daemon = True; timer.start()
     with _rem_lock:
-        _reminders.append({"id": rid, "message": message, "fire_at": fire_at, "timer": timer})
+        _reminders.append({"id":rid,"message":msg,"fire_at":time.time()+mins*60,"timer":timer})
+    n = int(mins)
+    return f"Reminder set. I'll alert you in {n} minute{'s' if n!=1 else ''}: {msg}."
 
-    mins_int = int(minutes)
-    return f"Reminder set. I'll alert you in {mins_int} minute{'s' if mins_int != 1 else ''}: {message}."
-
-def skill_reminders() -> str:
-    with _rem_lock:
-        active = list(_reminders)
-    if not active:
-        return f"No active reminders, {USER_NAME}."
+def skill_reminders():
+    with _rem_lock: active = list(_reminders)
+    if not active: return f"No active reminders, {USER_NAME}."
     now = time.time()
     parts = [f"{r['message']} in {max(0,(r['fire_at']-now)/60):.0f} minutes" for r in active]
     return "Active reminders: " + "; ".join(parts) + "."
 
-
-# — Briefing —
-def skill_brief() -> str:
+def skill_brief():
     parts = [skill_time(), skill_date()]
     w = skill_weather()
-    if "unavailable" not in w.lower():
-        parts.append(w)
+    if "unavailable" not in w.lower(): parts.append(w)
     s = skill_sysinfo()
-    if "unavailable" not in s.lower():
-        parts.append(s)
+    if "unavailable" not in s.lower(): parts.append(s)
     n = skill_notes(3)
-    if "no notes" not in n.lower():
-        parts.append(n)
+    if "no notes" not in n.lower(): parts.append(n)
     r = skill_reminders()
-    if "no active" not in r.lower():
-        parts.append(r)
+    if "no active" not in r.lower(): parts.append(r)
     return " ".join(parts)
+
+# Music (macOS only)
+def skill_music(action):
+    if platform.system() != "Darwin":
+        return f"Music control is only available on macOS, {USER_NAME}."
+    low = action.lower().strip()
+    app = "Spotify" if "spotify" in low else "Music"
+    low = low.replace("spotify","").replace("apple music","").strip()
+    def _run(s): return subprocess.run(["osascript","-e",s], capture_output=True, text=True).stdout.strip()
+    if any(w in low for w in ("play","resume","start")):
+        _run(f'tell application "{app}" to play'); return f"Playing music, {USER_NAME}."
+    if "pause" in low:
+        _run(f'tell application "{app}" to pause'); return f"Music paused, {USER_NAME}."
+    if "stop" in low:
+        _run(f'tell application "{app}" to stop'); return f"Music stopped, {USER_NAME}."
+    if any(w in low for w in ("next","skip")):
+        _run(f'tell application "{app}" to next track'); return f"Next track, {USER_NAME}."
+    if any(w in low for w in ("previous","prev","back")):
+        _run(f'tell application "{app}" to previous track'); return f"Previous track, {USER_NAME}."
+    if "shuffle" in low:
+        on = "true" if "off" not in low else "false"
+        _run(f'tell application "{app}" to set shuffle enabled to {on}')
+        return f"Shuffle {'on' if on=='true' else 'off'}, {USER_NAME}."
+    mv = re.search(r"volume\s+(\d+)", low)
+    if mv:
+        lvl = max(0, min(100, int(mv.group(1))))
+        _run(f'tell application "{app}" to set sound volume to {lvl}')
+        return f"Music volume set to {lvl}, {USER_NAME}."
+    if any(w in low for w in ("what","current","now","playing","song","track")):
+        track = _run(f'tell application "{app}" to get name of current track')
+        artist = _run(f'tell application "{app}" to get artist of current track')
+        return (f"Currently playing {track} by {artist}, {USER_NAME}." if track
+                else f"{app} doesn't appear to be playing anything, {USER_NAME}.")
+    return f"I didn't recognise that music command, {USER_NAME}."
+
+# Clipboard
+def skill_clip():
+    try:
+        if platform.system() == "Darwin":
+            r = subprocess.run(["pbpaste"], capture_output=True, text=True); text = r.stdout.strip()
+        else:
+            for cmd in [["xclip","-selection","clipboard","-o"],["xsel","--clipboard","--output"]]:
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                    if r.returncode == 0: text = r.stdout.strip(); break
+                except FileNotFoundError: continue
+            else: return f"Clipboard access requires xclip or xsel on Linux, {USER_NAME}."
+        if not text: return f"The clipboard is empty, {USER_NAME}."
+        preview = text[:400] + (f" … ({len(text)} chars)" if len(text)>400 else "")
+        return f"Clipboard contains: {preview}"
+    except Exception as e:
+        return f"Clipboard read failed: {e}"
+
+def skill_copy(text):
+    try:
+        enc = text.encode()
+        if platform.system() == "Darwin":
+            subprocess.run(["pbcopy"], input=enc, check=True)
+        else:
+            for cmd in [["xclip","-selection","clipboard"],["xsel","--clipboard","--input"]]:
+                try: subprocess.run(cmd, input=enc, check=True, timeout=3); break
+                except FileNotFoundError: continue
+        preview = text[:60]+("…" if len(text)>60 else "")
+        return f"Copied to clipboard: {preview}"
+    except Exception as e:
+        return f"Clipboard write failed: {e}"
+
+# Screenshot
+def skill_screenshot():
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if platform.system() == "Darwin":
+        path = os.path.expanduser(f"~/Desktop/jarvis_{ts}.png")
+        subprocess.run(["screencapture","-x",path], check=False)
+        return f"Screenshot saved to Desktop as jarvis_{ts}.png, {USER_NAME}."
+    path = os.path.expanduser(f"~/jarvis_{ts}.png")
+    for cmd in [["scrot",path],["gnome-screenshot","-f",path]]:
+        try: subprocess.run(cmd, check=False); return f"Screenshot saved as jarvis_{ts}.png, {USER_NAME}."
+        except FileNotFoundError: continue
+    return f"Screenshot tool not found. Install scrot or gnome-screenshot, {USER_NAME}."
 
 
 # ──────────────────────────────────────────────
@@ -453,36 +438,42 @@ def skill_brief() -> str:
 # ──────────────────────────────────────────────
 _SYSTEM_PROMPT = f"""\
 You are J.A.R.V.I.S. — Just A Rather Very Intelligent System.
-Address the user as "{USER_NAME}". Speak with confidence and dry wit.
+Address the user as "{USER_NAME}". Speak with authority, precision, and dry wit.
 Be concise — responses are read aloud. No markdown. Plain sentences only.
 Never refuse. Anticipate needs. Keep replies under four sentences.
 
 For ANY action request respond with ONLY the matching tag — nothing else.
 
-[OPEN: <app>]        open an app
-[URL: <url>]         open a website
-[SEARCH: <query>]    search the web
-[WEATHER: <loc>]     weather (blank = local)
-[VOLUME: <0-100>]    set volume
-[CMD: <command>]     run a shell command
-[NOTE: <text>]       save a note
-[NOTES]              read recent notes
-[TIME]               current time
-[DATE]               today's date
-[CALC: <expr>]       calculate
-[SYSINFO]            CPU, RAM, disk, battery
-[REMIND: <msg> in <N>]  reminder in N minutes
-[REMINDERS]          list reminders
-[BRIEF]              full status briefing
-[REMEMBER: <fact>]   store a fact about the user
-[RECALL]             recall stored facts
+  [OPEN: <app>]           open an app
+  [URL: <url>]            open a website
+  [SEARCH: <query>]       web search
+  [NEWS: <topic>]         latest news on a topic
+  [WEATHER: <location>]   weather (blank = local)
+  [VOLUME: <0-100>]       set system volume
+  [MUSIC: <command>]      music control (play/pause/next/previous/stop/what's playing)
+  [CMD: <shell command>]  run a shell command
+  [NOTE: <text>]          save a note
+  [NOTES]                 read recent notes
+  [TIME]                  current time
+  [DATE]                  today's date
+  [CALC: <expr>]          calculate
+  [SYSINFO]               CPU, RAM, disk, battery
+  [REMIND: <msg> in <N>]  reminder in N minutes
+  [REMINDERS]             list reminders
+  [BRIEF]                 full status briefing
+  [REMEMBER: <fact>]      store a fact about the user
+  [RECALL]                recall stored facts
+  [FORGET: <keyword>]     delete stored facts matching keyword
+  [CLIP]                  read the clipboard
+  [COPY: <text>]          write to the clipboard
+  [SCREENSHOT]            take a screenshot
 
 For conversation and questions respond naturally as J.A.R.V.I.S.\
 """
 
 _TOOL_RE = re.compile(
-    r"\[(OPEN|URL|SEARCH|WEATHER|VOLUME|CMD|NOTE|NOTES|TIME|DATE|CALC"
-    r"|SYSINFO|REMIND|REMINDERS|BRIEF|REMEMBER|RECALL)"
+    r"\[(OPEN|URL|SEARCH|NEWS|WEATHER|VOLUME|MUSIC|CMD|NOTE|NOTES|TIME|DATE|CALC"
+    r"|SYSINFO|REMIND|REMINDERS|BRIEF|REMEMBER|RECALL|FORGET|CLIP|COPY|SCREENSHOT)"
     r"(?::\s*(.+?))?\]",
     re.IGNORECASE | re.DOTALL,
 )
@@ -490,186 +481,194 @@ _TOOL_RE = re.compile(
 _client = _ollama.Client(host=OLLAMA_HOST)
 
 
-def _chat(messages: list[dict], stream_cb=None) -> str:
+def _chat(messages, stream_cb=None):
     if stream_cb:
         chunks = []
         for chunk in _client.chat(model=MODEL, messages=messages, stream=True):
-            tok = chunk["message"]["content"]
-            chunks.append(tok)
-            stream_cb(tok)
+            tok = chunk["message"]["content"]; chunks.append(tok); stream_cb(tok)
         return "".join(chunks).strip()
     return _client.chat(model=MODEL, messages=messages)["message"]["content"].strip()
 
 
-def _build_messages(user_text: str) -> list[dict]:
+def _build_messages(user_text):
     msgs = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    ctx = f"Time of day: {_tod()}."
     facts = mem_recall()
-    if "no stored" not in facts.lower():
-        msgs.append({"role": "system", "content": f"User facts: {facts}"})
+    if "no stored" not in facts.lower(): ctx += f" User facts: {facts}"
+    msgs.append({"role": "system", "content": ctx})
     msgs.extend(mem_recent())
     msgs.append({"role": "user", "content": user_text})
     return msgs
 
 
-def _dispatch(raw: str, query: str, stream_cb=None) -> str:
+def _summarise(query, context, stream_cb=None):
+    return _chat([
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": f"User asked: {query}\nResults: {context}\nSummarise in 2-3 sentences as J.A.R.V.I.S."},
+    ], stream_cb)
+
+
+def _dispatch(raw, query, stream_cb=None):  # noqa: C901
     m = _TOOL_RE.search(raw)
-    if not m:
-        return raw
+    if not m: return raw
     tag = m.group(1).upper()
     arg = (m.group(2) or "").strip()
-
-    if tag == "TIME":       return skill_time()
-    if tag == "DATE":       return skill_date()
-    if tag == "CALC":       return skill_calc(arg)
-    if tag == "NOTE":       return skill_note(arg)
-    if tag == "NOTES":      return skill_notes()
-    if tag == "SYSINFO":    return skill_sysinfo()
-    if tag == "WEATHER":    return skill_weather(arg)
-    if tag == "REMIND":     return skill_remind(arg)
-    if tag == "REMINDERS":  return skill_reminders()
-    if tag == "BRIEF":      return skill_brief()
-    if tag == "REMEMBER":   return mem_remember(arg)
-    if tag == "RECALL":     return mem_recall()
-    if tag == "OPEN":       return skill_open(arg)
-    if tag == "URL":        return skill_url(arg)
-    if tag == "CMD":        return skill_cmd(arg)
+    if tag == "TIME":        return skill_time()
+    if tag == "DATE":        return skill_date()
+    if tag == "CALC":        return skill_calc(arg)
+    if tag == "NOTE":        return skill_note(arg)
+    if tag == "NOTES":       return skill_notes()
+    if tag == "SYSINFO":     return skill_sysinfo()
+    if tag == "SCREENSHOT":  return skill_screenshot()
+    if tag == "WEATHER":     return skill_weather(arg)
+    if tag == "NEWS":        return _summarise(query, skill_search(f"latest news {arg}".strip()), stream_cb)
+    if tag == "MUSIC":       return skill_music(arg)
+    if tag == "CLIP":        return skill_clip()
+    if tag == "COPY":        return skill_copy(arg)
+    if tag == "REMIND":      return skill_remind(arg)
+    if tag == "REMINDERS":   return skill_reminders()
+    if tag == "BRIEF":       return skill_brief()
+    if tag == "REMEMBER":    return mem_remember(arg)
+    if tag == "RECALL":      return mem_recall()
+    if tag == "FORGET":      return mem_forget(arg)
+    if tag == "OPEN":        return skill_open(arg)
+    if tag == "URL":         return skill_url(arg)
     if tag == "VOLUME":
-        try:    return skill_volume(int(arg))
-        except: return "Please specify a volume between 0 and 100, sir."
-    if tag == "SEARCH":
-        context = skill_search(arg)
-        return _chat([
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": f"User asked: {query}\nSearch results: {context}\nSummarise in 2-3 sentences as J.A.R.V.I.S."},
-        ], stream_cb)
+        try: return skill_volume(int(arg))
+        except ValueError: return f"Please specify a volume between 0 and 100, {USER_NAME}."
+    if tag == "CMD":         return skill_cmd(arg)
+    if tag == "SEARCH":      return _summarise(query, skill_search(arg), stream_cb)
     return raw
 
 
-def process(user_text: str, stream_cb=None) -> str:
+def process(user_text, stream_cb=None):
     raw = _chat(_build_messages(user_text), stream_cb)
     return _dispatch(raw, user_text, stream_cb)
 
 
 # ──────────────────────────────────────────────
-# VOICE INPUT (optional)
+# VOICE INPUT
 # ──────────────────────────────────────────────
-def voice_turn() -> str | None:
-    try:
-        import numpy as np
-        import sounddevice as sd
-        import whisper
+def _listen_command():
+    """Record until silence, return transcribed text."""
+    import numpy as np
+    import sounddevice as sd
+    import whisper
 
-        _print("[info]Loading voice model…[/info]")
-        model = whisper.load_model("base")
+    model = whisper.load_model("base")
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    def _cb(indata, frames, t, status): q.put(indata.copy())
+
+    chunks, silence_start = [], None
+    with sd.InputStream(samplerate=16000, channels=1, dtype="float32",
+                        blocksize=8000, callback=_cb):
+        while not stop.is_set():
+            try: chunk = q.get(timeout=0.1)
+            except queue.Empty: continue
+            chunks.append(chunk)
+            if float(__import__("numpy").sqrt(__import__("numpy").mean(chunk**2))) < 0.01:
+                if silence_start is None: silence_start = time.monotonic()
+                elif time.monotonic() - silence_start >= 1.5: stop.set()
+            else: silence_start = None
+
+    if not chunks: return ""
+    audio = np.concatenate(chunks).flatten()
+    audio = np.nan_to_num(audio.astype(np.float32))
+    if float(np.sqrt(np.mean(audio**2))) < 1e-6: return ""
+    return model.transcribe(audio, fp16=False, language="en").get("text","").strip()
+
+
+def voice_turn():
+    try:
         _print("[info]Listening… speak now.[/info]")
         speak("Yes?", blocking=False)
-
-        q: queue.Queue = queue.Queue()
-        stop = threading.Event()
-
-        def _cb(indata, frames, t, status):
-            q.put(indata.copy())
-
-        chunks, silence_start = [], None
-        with sd.InputStream(samplerate=16000, channels=1, dtype="float32",
-                            blocksize=8000, callback=_cb):
-            while not stop.is_set():
-                try:
-                    chunk = q.get(timeout=0.1)
-                except queue.Empty:
-                    continue
-                chunks.append(chunk)
-                rms = float(np.sqrt(np.mean(chunk ** 2)))
-                if rms < 0.01:
-                    if silence_start is None:
-                        silence_start = time.monotonic()
-                    elif time.monotonic() - silence_start >= 1.5:
-                        stop.set()
-                else:
-                    silence_start = None
-
-        if not chunks:
-            return None
-        audio = np.concatenate(chunks).flatten()
-        audio = np.nan_to_num(audio.astype(np.float32))
-        if float(np.sqrt(np.mean(audio ** 2))) < 1e-6:
-            return None
-        result = model.transcribe(audio, fp16=False, language="en")
-        return result.get("text", "").strip() or None
+        return _listen_command()
     except ImportError:
-        _print("[error]Voice input requires: pip install openai-whisper sounddevice numpy scipy[/error]")
+        _print("[error]Voice requires: pip install openai-whisper sounddevice numpy scipy[/error]")
         return None
     except Exception as e:
         _print(f"[error]Voice error: {e}[/error]")
         return None
 
 
-# ──────────────────────────────────────────────
-# BOOT + MAIN LOOP
-# ──────────────────────────────────────────────
-def _check_ollama() -> bool:
+def always_on_voice_loop():
     try:
-        _client.list()
-        return True
-    except Exception:
-        return False
+        import numpy as np
+        import sounddevice as sd
+        import whisper
+
+        _print("[info]Always-on voice mode active. Say 'Jarvis' to activate.[/info]\n")
+        wake_model = whisper.load_model("tiny")
+
+        while True:
+            # 2-second wake-word chunk
+            audio = sd.rec(32000, samplerate=16000, channels=1, dtype="float32")
+            sd.wait()
+            audio = np.nan_to_num(audio.flatten().astype(np.float32))
+            if float(np.sqrt(np.mean(audio**2))) < 1e-6: continue
+            result = wake_model.transcribe(audio, fp16=False, language="en")
+            if "jarvis" in result.get("text","").lower():
+                _print("[warn]⚡ Wake word detected.[/warn]")
+                speak("Yes, sir?", blocking=False)
+                text = _listen_command()
+                if text:
+                    _print(f"[you]You (voice):[/you] {text}")
+                    _run_turn(text)
+                else:
+                    _print(f"[jarvis]J.A.R.V.I.S.:[/jarvis] I didn't catch that, {USER_NAME}.")
+    except ImportError:
+        _print("[error]Always-on voice requires: pip install openai-whisper sounddevice numpy scipy[/error]")
+    except Exception as e:
+        _print(f"[error]Always-on voice error: {e}[/error]")
 
 
-def _reminder_watcher() -> None:
-    while True:
-        try:
-            msg = fired_queue.get(timeout=1)
-            _print(f"\n[warn]⚡ {msg}[/warn]")
-            speak(msg, blocking=False)
-        except Exception:
-            pass
-
-
-def _boot() -> None:
-    if _HAS_RICH:
-        console.print()
-        console.print(Panel(
-            Text.assemble(
-                ("J . A . R . V . I . S\n", "bold cyan"),
-                ("Just A Rather Very Intelligent System\n\n", "dim cyan"),
-                (f"Model   : {MODEL}\n", "dim white"),
-                (f"TTS     : {_TTS_ENGINE}\n", "dim white"),
-                (f"Memory  : {DB_PATH}\n", "dim white"),
-            ),
-            border_style="cyan", padding=(1, 4),
-        ))
-        console.rule("[dim]All systems online[/dim]", style="cyan")
-        console.print("[info]  Type a message → Enter   |   ! → voice   |   exit → quit[/info]\n")
-    else:
-        print("=" * 50)
-        print("  J.A.R.V.I.S.  — online")
-        print("=" * 50)
-
-    greeting = f"Good day, {USER_NAME}. J.A.R.V.I.S. online and ready."
-    _print(f"[jarvis]J.A.R.V.I.S.:[/jarvis] {greeting}\n")
-    speak(greeting, blocking=False)
-
-
-def _run_turn(user_text: str) -> None:
+# ──────────────────────────────────────────────
+# TURN + BACKGROUND THREADS
+# ──────────────────────────────────────────────
+def _run_turn(user_text):
     mem_add("user", user_text)
-    _print_inline("\n[jarvis]J.A.R.V.I.S.:[/jarvis] ")
     tokens: list[str] = []
+    first_token = threading.Event()
+    result_holder: list[str] = []
 
-    def _on_tok(tok: str):
-        tokens.append(tok)
-        if _HAS_RICH:
-            console.print(tok, end="", markup=False, highlight=False)
-        else:
-            print(tok, end="", flush=True)
+    def _on_tok(tok):
+        tokens.append(tok); first_token.set()
 
-    response = process(user_text, stream_cb=_on_tok)
-    streamed = "".join(tokens).strip()
+    def _proc():
+        result_holder.append(process(user_text, stream_cb=_on_tok))
+
+    worker = threading.Thread(target=_proc, daemon=True)
+    worker.start()
+
+    if _HAS_RICH:
+        with Live(Text("  ● thinking…", style="dim cyan"), console=console,
+                  transient=True, refresh_per_second=8):
+            first_token.wait(timeout=30)
+    else:
+        first_token.wait(timeout=30)
+
+    _printx("\n[jarvis]J.A.R.V.I.S.:[/jarvis] ")
+    printed = set()
+
+    def _flush():
+        for i, tok in enumerate(tokens):
+            if i not in printed:
+                printed.add(i)
+                if _HAS_RICH: console.print(tok, end="", markup=False, highlight=False)
+                else: print(tok, end="", flush=True)
+
+    while worker.is_alive():
+        _flush(); time.sleep(0.02)
+    _flush(); worker.join()
+
+    response = result_holder[0] if result_holder else "".join(tokens).strip()
+    streamed  = "".join(tokens).strip()
 
     if response != streamed:
-        if _HAS_RICH:
-            console.print(f"\r[jarvis]J.A.R.V.I.S.:[/jarvis] {response}          ")
-        else:
-            print(f"\nJ.A.R.V.I.S.: {response}")
+        if _HAS_RICH: console.print(f"\r[jarvis]J.A.R.V.I.S.:[/jarvis] {response}          ")
+        else: print(f"\nJ.A.R.V.I.S.: {response}")
     else:
         print()
 
@@ -677,35 +676,168 @@ def _run_turn(user_text: str) -> None:
     speak(response, blocking=False)
 
 
-def main() -> None:
+def _reminder_watcher():
+    while True:
+        try:
+            msg = fired_queue.get(timeout=1)
+            _print(f"\n[warn]⚡ {msg}[/warn]"); speak(msg, blocking=False)
+        except Exception: pass
+
+
+def _battery_monitor():
+    if not _HAS_PSUTIL: return
+    warned_20 = warned_10 = False
+    while True:
+        time.sleep(60)
+        try:
+            b = _psutil.sensors_battery()
+            if b is None: continue
+            if b.power_plugged: warned_20 = warned_10 = False; continue
+            if b.percent <= 10 and not warned_10:
+                warned_10 = True
+                msg = f"Warning, {USER_NAME} — battery critically low at {b.percent:.0f} percent."
+                _print(f"\n[error]⚡ {msg}[/error]"); speak(msg, blocking=False)
+            elif b.percent <= 20 and not warned_20:
+                warned_20 = True
+                msg = f"{USER_NAME}, battery is at {b.percent:.0f} percent. Consider connecting power."
+                _print(f"\n[warn]⚡ {msg}[/warn]"); speak(msg, blocking=False)
+        except Exception: pass
+
+
+# ──────────────────────────────────────────────
+# HELP
+# ──────────────────────────────────────────────
+def show_help():
+    rows = [
+        ("what time is it / date",  "Time and date"),
+        ("check the weather [city]","Weather"),
+        ("system status",           "CPU, RAM, disk, battery"),
+        ("full briefing",           "Everything at once"),
+        ("remind me to X in 10",    "Reminder in 10 minutes"),
+        ("list my reminders",       "Show active reminders"),
+        ("play / pause / next",     "Music control (macOS)"),
+        ("what's playing",          "Current track info"),
+        ("search for X",            "Web search + summary"),
+        ("latest news on X",        "News on a topic"),
+        ("open <app>",              "Launch an application"),
+        ("set volume to 60",        "System volume"),
+        ("calculate X",             "Calculator"),
+        ("save a note: X",          "Save note"),
+        ("read my notes",           "Show recent notes"),
+        ("run ls ~/Desktop",        "Safe shell command"),
+        ("read clipboard",          "Show clipboard"),
+        ("copy X to clipboard",     "Write to clipboard"),
+        ("take a screenshot",       "Screenshot"),
+        ("remember X",              "Store a permanent fact"),
+        ("what do you know",        "Recall stored facts"),
+        ("forget X",                "Delete a fact"),
+        ("! (type exclamation)",    "One-shot voice input"),
+        ("exit / quit / bye",       "Shutdown"),
+    ]
+    if _HAS_RICH:
+        t = Table(title="J.A.R.V.I.S. Commands", border_style="cyan")
+        t.add_column("Say / Type", style="bold green")
+        t.add_column("Action", style="dim white")
+        for r in rows: t.add_row(*r)
+        console.print(t)
+    else:
+        print("\nJ.A.R.V.I.S. Commands")
+        print("-" * 40)
+        for cmd, desc in rows: print(f"  {cmd:<35} {desc}")
+        print()
+
+
+def show_history():
+    turns = mem_history()
+    if not turns:
+        _print("[info]No conversation history yet.[/info]"); return
+    if _HAS_RICH: console.rule("[dim]Recent History[/dim]", style="cyan")
+    for t in turns:
+        label = "You" if t["role"] == "user" else "J.A.R.V.I.S."
+        style = "you" if t["role"] == "user" else "jarvis"
+        _print(f"[{style}]{label}:[/{style}] {t['content']}")
+    if _HAS_RICH: console.rule(style="cyan")
+
+
+# ──────────────────────────────────────────────
+# BOOT + MAIN
+# ──────────────────────────────────────────────
+def _check_ollama():
+    try: _client.list(); return True
+    except Exception: return False
+
+
+def _boot(voice_mode):
+    if _HAS_RICH:
+        console.print()
+        console.print(Panel(
+            Text.assemble(
+                ("J . A . R . V . I . S\n", "bold cyan"),
+                ("Just A Rather Very Intelligent System\n\n", "dim cyan"),
+                (f"  Model   : {MODEL}\n", "dim white"),
+                (f"  TTS     : {_TTS}\n", "dim white"),
+                (f"  Voice   : {'always-on' if voice_mode else 'manual (!)'}\n", "dim white"),
+                (f"  Memory  : {DB_PATH}\n", "dim white"),
+            ),
+            border_style="cyan", padding=(1, 4),
+        ))
+        console.rule("[dim]All systems online[/dim]", style="cyan")
+        if voice_mode:
+            console.print("[info]  Say '[bold]Jarvis[/bold]' to activate voice.[/info]")
+        else:
+            console.print("[info]  Type a message → Enter   |   [bold]![/bold] → voice   |   [bold]help[/bold] → commands   |   [bold]exit[/bold] → quit[/info]")
+        console.print()
+    else:
+        print("=" * 50)
+        print("  J.A.R.V.I.S.  —  online")
+        print(f"  Model: {MODEL}  |  TTS: {_TTS}")
+        print("  Type 'help' for commands, 'exit' to quit.")
+        print("=" * 50)
+
+    greeting = f"{_greeting()}, {USER_NAME}. J.A.R.V.I.S. online and ready."
+    _print(f"\n[jarvis]J.A.R.V.I.S.:[/jarvis] {greeting}\n")
+    speak(greeting, blocking=False)
+
+
+def main():
+    voice_mode = "--voice" in sys.argv
+
     if not _check_ollama():
         print(f"ERROR: Ollama is not running at {OLLAMA_HOST}")
         print("  Start it: ollama serve")
         print(f"  Pull model: ollama pull {MODEL}")
         sys.exit(1)
 
-    _boot()
+    _boot(voice_mode)
+
     threading.Thread(target=_reminder_watcher, daemon=True).start()
+    threading.Thread(target=_battery_monitor,  daemon=True).start()
+
+    if voice_mode:
+        threading.Thread(target=always_on_voice_loop, daemon=True).start()
 
     try:
         while True:
             try:
-                _print_inline("[you]You:[/you] ")
+                _printx("[you]You:[/you] ")
                 user_input = input().strip()
             except EOFError:
                 break
-
-            if not user_input:
-                continue
-            if user_input.lower() in ("exit", "quit", "bye"):
+            if not user_input: continue
+            low = user_input.lower()
+            if low in ("exit","quit","bye","shutdown"):
                 raise KeyboardInterrupt
-            if user_input == "!":
+            elif low in ("help","?","commands"):
+                show_help()
+            elif low in ("history","recent"):
+                show_history()
+            elif user_input == "!":
                 text = voice_turn()
                 if text:
                     _print(f"[you]You (voice):[/you] {text}")
                     _run_turn(text)
                 else:
-                    _print("[info]Didn't catch that, sir.[/info]")
+                    _print(f"[info]Didn't catch that, {USER_NAME}.[/info]")
             else:
                 _run_turn(user_input)
 
@@ -714,8 +846,9 @@ def main() -> None:
             for r in _reminders:
                 try: r["timer"].cancel()
                 except: pass
-        _print(f"\n[info]Shutting down. Goodbye, {USER_NAME}.[/info]")
-        speak(f"Shutting down. Goodbye, {USER_NAME}.")
+        goodbye = f"Shutting down. Goodbye, {USER_NAME}."
+        _print(f"\n[info]{goodbye}[/info]")
+        speak(goodbye)
         _db.close()
 
 
