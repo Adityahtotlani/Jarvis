@@ -109,7 +109,7 @@ def boot_sequence(config: dict, speaker: Speaker, voice_mode: bool) -> None:
     if voice_mode:
         console.print(f"[info]  Say '[bold]Jarvis[/bold]' to activate voice input.[/info]")
     else:
-        console.print("[info]  Type a message → Enter   |   [bold]![/bold] → voice input[/info]")
+        console.print("[info]  Type a message → Enter   |   [bold]![/bold] → voice   |   [bold]--web[/bold] → browser UI[/info]")
     console.print("[info]  [bold]help[/bold] → commands   [bold]history[/bold] → recent turns   [bold]exit[/bold] → quit[/info]\n")
 
     greeting = f"{_time_greeting()}, {user_name}. All systems are online and ready."
@@ -349,6 +349,7 @@ def always_on_voice_loop(
 
 def main() -> None:
     voice_mode = "--voice" in sys.argv
+    web_mode   = "--web"   in sys.argv
 
     config = load_config()
     speaker = Speaker(config)
@@ -363,6 +364,13 @@ def main() -> None:
             f"[info]  Pull model: ollama pull {brain.model}[/info]"
         )
         sys.exit(1)
+
+    # Web dashboard mode — starts browser UI and blocks
+    if web_mode:
+        from jarvis.web.server import WebServer
+        boot_sequence(config, speaker, voice_mode)
+        WebServer(brain, memory, speaker).run()
+        return
 
     boot_sequence(config, speaker, voice_mode)
 

@@ -9,6 +9,8 @@ from jarvis.memory.conversation import ConversationMemory
 from jarvis.skills import system_control, web_search
 from jarvis.skills.briefing import get_briefing
 from jarvis.skills.clipboard import read_clipboard, write_clipboard
+from jarvis.skills.files import read_file, safe_python
+from jarvis.skills.lookup import translate, wikipedia
 from jarvis.skills.music import control as music_control
 from jarvis.skills.reminders import list_reminders, parse_remind_arg, set_reminder
 from jarvis.skills.system_monitor import get_system_info
@@ -52,13 +54,18 @@ CRITICAL RULE: For ANY action request, respond with ONLY the matching tag — no
   [CLIP]                          read the clipboard
   [COPY: <text>]                  write text to the clipboard
   [SCREENSHOT]                    take a screenshot
+  [WIKI: <topic>]                 Wikipedia summary on any topic
+  [TRANSLATE: <text> to <lang>]   translate text to another language
+  [FILE: <path>]                  read and summarise a file
+  [PYTHON: <code>]                execute a Python expression or snippet
 
 For conversation, questions, and greetings — respond naturally as J.A.R.V.I.S.\
 """
 
 _TOOL_RE = re.compile(
     r"\[(OPEN|URL|SEARCH|NEWS|WEATHER|VOLUME|MUSIC|CMD|NOTE|NOTES|TIME|DATE|CALC"
-    r"|SYSINFO|REMIND|REMINDERS|BRIEF|REMEMBER|RECALL|FORGET|CLIP|COPY|SCREENSHOT)"
+    r"|SYSINFO|REMIND|REMINDERS|BRIEF|REMEMBER|RECALL|FORGET|CLIP|COPY|SCREENSHOT"
+    r"|WIKI|TRANSLATE|FILE|PYTHON)"
     r"(?::\s*(.+?))?\]",
     re.IGNORECASE | re.DOTALL,
 )
@@ -145,6 +152,16 @@ class Brain:
         if tag == "SYSINFO":        return get_system_info()
         if tag == "SCREENSHOT":     return _take_screenshot()
 
+        # Knowledge & code
+        if tag == "WIKI":           return wikipedia(arg)
+        if tag == "TRANSLATE":      return translate(arg)
+        if tag == "PYTHON":         return safe_python(arg)
+        if tag == "FILE":
+            content, err = read_file(arg)
+            if err:
+                return err
+            return self._summarise_file(arg, content, stream_callback)
+
         # Weather / news
         if tag == "WEATHER":        return get_weather(arg)
         if tag == "NEWS":
@@ -184,6 +201,22 @@ class Brain:
             return self._summarise(original_query, context, stream_callback)
 
         return raw
+
+    def _summarise_file(self, path: str, content: str, stream_callback=None) -> str:
+        msgs = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"The user asked me to read the file: {path}\n"
+                    f"File contents:\n\n{content}\n\n"
+                    "Provide a concise spoken summary of this file as J.A.R.V.I.S. "
+                    "Mention the file type, purpose, and key contents. "
+                    "Address the user as sir. Keep it under five sentences."
+                ),
+            },
+        ]
+        return self._chat(msgs, stream_callback)
 
     def _summarise(self, query: str, context: str, stream_callback=None) -> str:
         msgs = [
