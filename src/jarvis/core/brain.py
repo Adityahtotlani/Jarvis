@@ -51,7 +51,8 @@ CRITICAL RULE: For ANY action request, respond with ONLY the matching tag — no
   [DATE]                          tell today's date
   [CALC: <expression>]            perform a calculation
   [SYSINFO]                       report CPU, RAM, disk, and battery status
-  [REMIND: <message> in <N>]      set a reminder (N = minutes)
+  [REMIND: <message> in <N>]      set a reminder (N = minutes or hours, e.g., "in 30", "in 2 hours")
+  [REMIND: <message> at <time>]   absolute reminder (e.g., "at 3pm", "at 3:30pm", "tomorrow at 9am")
   [REMINDERS]                     list all active reminders
   [BRIEF]                         deliver a full status briefing
   [REMEMBER: <fact about user>]   permanently store a fact about the user
