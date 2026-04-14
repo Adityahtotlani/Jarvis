@@ -2,14 +2,16 @@
 
 import threading
 import time
+from datetime import datetime, timezone
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, Response, jsonify, render_template
 from flask_socketio import SocketIO, emit
 
 from jarvis.core.brain import Brain
 from jarvis.core.speaker import Speaker
 from jarvis.memory.conversation import ConversationMemory
 from jarvis.skills import reminders as reminder_module
+from jarvis.skills import timer as timer_module
 
 
 class WebServer:
@@ -93,6 +95,54 @@ class WebServer:
         def reminders():
             text = reminder_module.list_reminders()
             return jsonify({"text": text})
+
+        @app.route("/api/timers")
+        def timers():
+            active = timer_module.get_active_timers()
+            return jsonify({
+                "timers": [
+                    {
+                        "id":                str(t["id"]),
+                        "label":             f"Timer {t['id']}",
+                        "remaining_seconds": round(t["remaining"], 1),
+                    }
+                    for t in active
+                ]
+            })
+
+        @app.route("/api/export")
+        def export():
+            turns = self._memory.get_recent(200)
+            now   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            lines: list[str] = [
+                "# J.A.R.V.I.S. Conversation Export",
+                f"",
+                f"**Exported:** {now}  ",
+                f"**Turns:** {len(turns)}",
+                "",
+                "---",
+                "",
+            ]
+            for turn in turns:
+                role    = turn.get("role", "unknown")
+                content = turn.get("content", "")
+                tag     = "**You**" if role == "user" else "**J.A.R.V.I.S.**"
+                lines.append(f"{tag}")
+                lines.append("")
+                lines.append(content)
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+
+            md = "\n".join(lines)
+            filename = f"jarvis-export-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.md"
+            return Response(
+                md,
+                mimetype="text/markdown",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
 
     # ------------------------------------------------------------------
     # Socket.IO events

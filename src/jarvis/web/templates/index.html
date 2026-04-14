@@ -264,8 +264,58 @@
 
   .prompt-label { color: var(--c2); letter-spacing: 1px; }
 
+  /* ── Timers widget ── */
+  .timer-item {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: var(--bg3);
+    border-radius: 4px;
+    border-left: 2px solid var(--c);
+    font-size: 12px;
+    animation: fadeIn .3s ease;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .timer-label { color: var(--text); flex: 1; }
+  .timer-countdown {
+    color: var(--c);
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+    min-width: 52px;
+    text-align: right;
+  }
+  .timer-track {
+    height: 3px;
+    background: var(--c3);
+    border-radius: 2px;
+    margin-top: 5px;
+    overflow: hidden;
+  }
+  .timer-progress {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--c2), var(--c));
+    box-shadow: 0 0 5px var(--c);
+    transition: width .48s linear;
+  }
+  .timer-block { width: 100%; }
+
   /* ── Utility ── */
   .sep { margin: 12px 0; border: none; border-top: 1px solid var(--c3); }
+
+  /* ── Keyboard shortcut hint ── */
+  .shortcut-hint {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    margin-top: 6px;
+    padding: 4px 6px;
+    border: 1px solid var(--c3);
+    border-radius: 4px;
+    display: inline-block;
+  }
 </style>
 </head>
 
@@ -331,6 +381,11 @@
 
 <!-- ══ RIGHT: SIDEBAR ══════════════════════════════════════════════════ -->
 <div class="panel sidebar">
+  <div class="section-title">Active Timers</div>
+  <div id="timers-list"><p class="empty-note">No active timers.</p></div>
+
+  <hr class="sep">
+
   <div class="section-title">Reminders</div>
   <div id="reminders-list"><p class="empty-note">No active reminders.</p></div>
 
@@ -344,6 +399,7 @@
 <footer>
   <span class="prompt-label">&gt;</span>
   <input id="prompt" type="text" placeholder="Issue a command, sir…" autocomplete="off" spellcheck="false">
+  <span class="shortcut-hint" title="Ctrl+K clear · Ctrl+E export · Ctrl+L focus">^K ^E ^L</span>
   <button class="send-btn" id="send-btn">Send</button>
 </footer>
 
@@ -557,6 +613,125 @@ function escHtml(s) {
 
 // ── Auto-focus input ───────────────────────────────────────────────────
 document.getElementById('prompt').focus();
+
+// ── Active timers widget ───────────────────────────────────────────────
+// Tracks timer state client-side for smooth countdown interpolation.
+// Server is the authority; we re-sync every 500 ms and fill in between.
+const _timerState = {};   // id -> { label, endMs }
+
+function _fmtSeconds(s) {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+function _renderTimers() {
+  const el  = document.getElementById('timers-list');
+  const now = Date.now();
+  const ids = Object.keys(_timerState);
+
+  // Remove expired
+  for (const id of ids) {
+    if (_timerState[id].endMs <= now) delete _timerState[id];
+  }
+
+  const active = Object.keys(_timerState);
+  if (active.length === 0) {
+    el.innerHTML = '<p class="empty-note">No active timers.</p>';
+    return;
+  }
+
+  el.innerHTML = active.map(id => {
+    const t         = _timerState[id];
+    const remaining = Math.max(0, (t.endMs - now) / 1000);
+    const pct       = Math.min(100, (remaining / t.durationSec) * 100);
+    return `
+      <div class="timer-item">
+        <div class="timer-block">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span class="timer-label">${escHtml(t.label)}</span>
+            <span class="timer-countdown">${_fmtSeconds(remaining)}</span>
+          </div>
+          <div class="timer-track">
+            <div class="timer-progress" style="width:${pct.toFixed(1)}%"></div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function _syncTimers() {
+  fetch('/api/timers')
+    .then(r => r.json())
+    .then(data => {
+      const now    = Date.now();
+      const ids    = new Set((data.timers || []).map(t => t.id));
+
+      // Remove stale entries no longer reported by server
+      for (const id of Object.keys(_timerState)) {
+        if (!ids.has(id)) delete _timerState[id];
+      }
+
+      for (const t of (data.timers || [])) {
+        const endMs      = now + t.remaining_seconds * 1000;
+        const existing   = _timerState[t.id];
+        // If we already track this timer, only adjust endMs if drift > 1s
+        if (existing) {
+          if (Math.abs(existing.endMs - endMs) > 1000) {
+            existing.endMs = endMs;
+          }
+        } else {
+          _timerState[t.id] = {
+            label:       t.label,
+            endMs:       endMs,
+            durationSec: t.remaining_seconds,  // approximation on first seen
+          };
+        }
+      }
+      _renderTimers();
+    })
+    .catch(() => {});
+}
+
+// Sync with server every 500 ms; re-render every 500 ms for smooth countdown
+setInterval(_syncTimers,   500);
+setInterval(_renderTimers, 500);
+_syncTimers();
+
+// ── Export conversation ────────────────────────────────────────────────
+function exportConversation() {
+  const a = document.createElement('a');
+  a.href  = '/api/export';
+  a.click();
+}
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────
+// Ctrl+K: clear history display
+// Ctrl+E: export conversation to markdown
+// Ctrl+L: focus input field
+document.addEventListener('keydown', e => {
+  if (!e.ctrlKey) return;
+
+  if (e.key === 'k' || e.key === 'K') {
+    e.preventDefault();
+    document.getElementById('messages').innerHTML = '';
+  }
+
+  if (e.key === 'e' || e.key === 'E') {
+    e.preventDefault();
+    exportConversation();
+  }
+
+  if (e.key === 'l' || e.key === 'L') {
+    e.preventDefault();
+    const inp = document.getElementById('prompt');
+    inp.focus();
+    inp.select();
+  }
+});
 </script>
 </body>
 </html>
