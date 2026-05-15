@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "jarvis": {
+      "command": "python3",
+      "args": ["-m", "jarvis.mcp.server"],
+      "cwd": "/root/projects/Jarvis/src"
+    }
+  }
+}

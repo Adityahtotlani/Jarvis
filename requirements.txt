@@ -12,3 +12,4 @@ requests>=2.31.0
 edge-tts>=6.1.9
 flask>=3.0.0
 flask-socketio>=5.3.6
+mcp>=1.0.0
