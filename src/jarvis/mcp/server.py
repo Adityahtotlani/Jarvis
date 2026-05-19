@@ -28,7 +28,7 @@ if _src not in sys.path:
 
 from mcp.server import FastMCP
 
-mcp = FastMCP("J.A.R.V.I.S.")
+mcp = FastMCP("J.A.R.V.I.S.", host="127.0.0.1", port=8765)
 
 
 # ---------------------------------------------------------------------------
@@ -354,4 +354,4 @@ def get_briefing() -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="sse")

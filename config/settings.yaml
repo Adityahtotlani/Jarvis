@@ -42,7 +42,7 @@ whisper:
   command_silence_threshold: 1.5
 
 ollama:
-  model: "llama3.2:1b"
+  model: "qwen2.5:1.5b"
   host: "http://localhost:11434"
   context_turns: 6
 

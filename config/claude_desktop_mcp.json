@@ -1,9 +1,17 @@
 {
-  "mcpServers": {
+  "_comment_local": "Use this block when running Jarvis on the same machine as Claude Desktop",
+  "mcpServers_local": {
     "jarvis": {
       "command": "python3",
       "args": ["-m", "jarvis.mcp.server"],
       "cwd": "/root/projects/Jarvis/src"
+    }
+  },
+
+  "_comment_remote": "Use this block when Jarvis runs on a remote server/VPS",
+  "mcpServers": {
+    "jarvis": {
+      "url": "http://YOUR_SERVER_IP:8765/sse"
     }
   }
 }

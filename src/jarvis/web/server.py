@@ -63,6 +63,7 @@ class WebServer:
             debug=False,
             log_output=False,
             use_reloader=False,
+            allow_unsafe_werkzeug=True,
         )
 
     # ------------------------------------------------------------------
