@@ -333,7 +333,10 @@
     <div class="pill on" id="pill-tts">TTS</div>
     <div class="pill" id="pill-voice">VOICE</div>
   </div>
-  <div style="display:flex;align-items:center;gap:8px;">
+  <div style="display:flex;align-items:center;gap:12px;">
+    {% if auth_enabled %}
+    <a href="/logout" style="font-size:10px;letter-spacing:2px;color:var(--dim);text-decoration:none;border:1px solid var(--dim);padding:3px 9px;border-radius:4px;transition:all .2s;" onmouseover="this.style.color='var(--err)';this.style.borderColor='var(--err)'" onmouseout="this.style.color='var(--dim)';this.style.borderColor='var(--dim)'">LOGOUT</a>
+    {% endif %}
     <span style="font-size:11px;color:var(--dim);letter-spacing:1px;" id="conn-label">OFFLINE</span>
     <div class="conn-dot" id="conn-dot"></div>
   </div>
@@ -375,7 +378,10 @@
 
 <!-- ══ CENTRE: CHAT ════════════════════════════════════════════════════ -->
 <div class="panel chat">
-  <div class="section-title">Conversation</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--c3);">
+    <span class="section-title" style="margin-bottom:0;border-bottom:none;">Conversation</span>
+    <button id="clear-btn" title="Clear conversation context (Ctrl+K)" style="background:transparent;border:1px solid var(--dim);border-radius:4px;color:var(--dim);font-family:inherit;font-size:10px;letter-spacing:2px;padding:2px 9px;cursor:pointer;text-transform:uppercase;transition:all .2s;" onmouseover="this.style.color='var(--err)';this.style.borderColor='var(--err)'" onmouseout="this.style.color='var(--dim)';this.style.borderColor='var(--dim)'">Clear Context</button>
+  </div>
   <div id="messages"></div>
 </div>
 
@@ -399,7 +405,7 @@
 <footer>
   <span class="prompt-label">&gt;</span>
   <input id="prompt" type="text" placeholder="Issue a command, sir…" autocomplete="off" spellcheck="false">
-  <span class="shortcut-hint" title="Ctrl+K clear · Ctrl+E export · Ctrl+L focus">^K ^E ^L</span>
+  <span class="shortcut-hint" title="Ctrl+K clear context · Ctrl+E export · Ctrl+L focus">^K clear · ^E export · ^L focus</span>
   <button class="send-btn" id="send-btn">Send</button>
 </footer>
 
@@ -701,6 +707,22 @@ setInterval(_syncTimers,   500);
 setInterval(_renderTimers, 500);
 _syncTimers();
 
+// ── Clear context ──────────────────────────────────────────────────────
+function clearContext() {
+  if (!confirm('Clear entire conversation context? This cannot be undone.')) return;
+  socket.emit('clear_context');
+}
+
+socket.on('context_cleared', () => {
+  document.getElementById('messages').innerHTML = '';
+  const note = document.createElement('div');
+  note.className = 'msg jarvis';
+  note.innerHTML = '<div class="msg-label">J.A.R.V.I.S.</div><div class="msg-body" style="color:var(--dim);font-style:italic;">Conversation context cleared, sir.</div>';
+  document.getElementById('messages').appendChild(note);
+});
+
+document.getElementById('clear-btn').addEventListener('click', clearContext);
+
 // ── Export conversation ────────────────────────────────────────────────
 function exportConversation() {
   const a = document.createElement('a');
@@ -709,15 +731,13 @@ function exportConversation() {
 }
 
 // ── Keyboard shortcuts ─────────────────────────────────────────────────
-// Ctrl+K: clear history display
-// Ctrl+E: export conversation to markdown
-// Ctrl+L: focus input field
+// Ctrl+K: clear context   Ctrl+E: export   Ctrl+L: focus input
 document.addEventListener('keydown', e => {
   if (!e.ctrlKey) return;
 
   if (e.key === 'k' || e.key === 'K') {
     e.preventDefault();
-    document.getElementById('messages').innerHTML = '';
+    clearContext();
   }
 
   if (e.key === 'e' || e.key === 'E') {

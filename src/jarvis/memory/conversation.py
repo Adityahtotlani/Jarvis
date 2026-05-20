@@ -113,6 +113,11 @@ class ConversationMemory:
             return f"I found no stored facts matching that, sir."
         return f"Done. I've removed {count} fact{'s' if count != 1 else ''}, sir."
 
+    def clear_history(self) -> None:
+        """Delete all conversation turns (facts are preserved)."""
+        self._conn.execute("DELETE FROM conversations")
+        self._conn.commit()
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

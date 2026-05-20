@@ -44,7 +44,7 @@ whisper:
 ollama:
   model: "qwen2.5:1.5b"
   host: "http://localhost:11434"
-  context_turns: 6
+  context_turns: 8
 
 audio:
   sample_rate: 16000
@@ -52,3 +52,8 @@ audio:
 
 memory:
   db_path: "~/.jarvis/memory.db"
+
+web:
+  port: 7575
+  # password: ""   # Uncomment and set to enable password protection on the web UI
+  #                # e.g.  password: "ironman"

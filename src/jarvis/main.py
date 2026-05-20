@@ -88,15 +88,16 @@ def _time_greeting() -> str:
 # Boot sequence
 # ------------------------------------------------------------------
 
-def boot_sequence(config: dict, speaker: Speaker, voice_mode: bool) -> None:
+def boot_sequence(config: dict, speaker: Speaker, voice_mode: bool, brain: "Brain" = None) -> None:
     user_name = config.get("jarvis", {}).get("user_name", "sir")
+    model_label = brain.model if brain else config.get("ollama", {}).get("model", "llama3.2:1b")
 
     console.print()
     console.print(Panel(
         Text.assemble(
             ("J . A . R . V . I . S\n", "bold cyan"),
             ("Just A Rather Very Intelligent System\n\n", "dim cyan"),
-            (f"  Model   : {config.get('ollama', {}).get('model', 'llama3.2:1b')}\n", "dim white"),
+            (f"  Model   : {model_label}\n", "dim white"),
             (f"  TTS     : {speaker.engine_name}\n", "dim white"),
             (f"  Voice   : {'always-on' if voice_mode else 'manual (!)'}\n", "dim white"),
             (f"  Memory  : active\n", "dim white"),
@@ -368,11 +369,12 @@ def main() -> None:
     # Web dashboard mode — starts browser UI and blocks
     if web_mode:
         from jarvis.web.server import WebServer
-        boot_sequence(config, speaker, voice_mode)
-        WebServer(brain, memory, speaker).run()
+        boot_sequence(config, speaker, voice_mode, brain)
+        pwd = config.get("web", {}).get("password", "")
+        WebServer(brain, memory, speaker, password=pwd).run()
         return
 
-    boot_sequence(config, speaker, voice_mode)
+    boot_sequence(config, speaker, voice_mode, brain)
 
     # Background threads
     threading.Thread(target=_watch_reminders, args=(speaker,), daemon=True).start()
